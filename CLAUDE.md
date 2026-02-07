@@ -43,20 +43,10 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - Frontend is now a React/Vite app in `frontend/` (replaces old single-file HTML)
 - `public/index.html` is a built artifact from the React frontend
 
-## Parallel Agent Coordination
-
-When multiple agents work on this codebase simultaneously, check this section first.
-
-### Active work streams (update when you start/finish a task)
-- **Context display on waiting sessions** (in progress): Adding `lastAssistantText` to `ManagedSession`, showing full context on session cards when session needs input. Touches: `shared/types.ts`, `server/SessionManager.ts`, `frontend/src/types.ts`, `frontend/src/components/SessionCard.tsx`, `frontend/src/App.css`
-- **React frontend migration** (done): Moved from single-file HTML to React/Vite in `frontend/`
-- **Hook improvements** (done): Extended assistantText to 500 chars, added pre_tool_use transcript extraction
-- **Session creation UI** (done): Directory browsing, flags support, recent dirs
-
-### Rules for agents
-1. Before editing a file, re-read it — another agent may have changed it
-2. After editing, rebuild frontend if you touched `frontend/`: `cd frontend && npm run build`
-3. Update this section when you start or finish a task
+## Parallel Agent Notes
+- When multiple agents edit this codebase, re-read files before editing (another agent may have changed them)
+- After editing `frontend/` files, rebuild: `cd frontend && npm run build`
+- Ephemeral coordination state lives in the memory directory, NOT here
 
 ## Remote Status Markers
 

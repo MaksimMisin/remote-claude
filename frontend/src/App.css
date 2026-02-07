@@ -166,52 +166,39 @@ header h1 {
 
 /* --- Session Cards --- */
 
-.card-swipe-container {
-  position: relative;
-  overflow: hidden;
-  border-radius: 12px;
-  margin-bottom: 8px;
-}
-
-.card-actions {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  align-items: stretch;
-}
-
-.card-action-btn {
-  width: 70px;
-  border: none;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 600;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.card-action-dismiss {
-  background: var(--gray);
-}
-
-.card-action-close {
-  background: var(--red);
-}
-
 .card {
   background: var(--card);
   border-radius: 12px;
   padding: 12px;
+  margin-bottom: 8px;
   cursor: pointer;
   min-height: 64px;
   border-left: 3px solid transparent;
   transition: border-color 0.2s;
-  position: relative;
-  z-index: 1;
+}
+
+.card-header-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.card-header-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #fff;
+}
+
+.card-btn-hide {
+  background: var(--gray);
+}
+
+.card-btn-close {
+  background: var(--red);
 }
 
 .card.selected {
