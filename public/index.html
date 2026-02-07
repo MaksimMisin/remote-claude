@@ -58,7 +58,7 @@ header h1 { font-size: 20px; font-weight: 700; }
 .event-marker { margin-top: 4px; padding: 4px 8px; background: #3D3520; border-radius: 6px; font-size: 12px; color: var(--amber); }
 #input-area { display: none; position: fixed; bottom: 0; left: 0; right: 0; z-index: 50; border-top: 1px solid #3A3A3C; background: var(--bg); }
 #input-area.visible { display: block; }
-#input-spacer { display: none; height: 120px; flex-shrink: 0; }
+#input-spacer { display: none; height: 56px; flex-shrink: 0; }
 #input-spacer.visible { display: block; }
 #img-preview { display: none; padding: 6px 12px 0; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 #img-preview.visible { display: flex; gap: 6px; align-items: flex-end; }
@@ -485,6 +485,7 @@ header h1 { font-size: 20px; font-weight: 700; }
       selectedId = id;
       $inputArea.classList.add('visible');
       $inputSpacer.classList.add('visible');
+      requestAnimationFrame(function() { $inputSpacer.style.height = $inputArea.offsetHeight + 'px'; });
       // Request history from server
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'select_session', payload: { sessionId: id } }));
