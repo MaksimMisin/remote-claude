@@ -5,7 +5,8 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 ## Project Structure
 - `server/` -- Node.js + TypeScript server (HTTP + WebSocket)
 - `hooks/` -- Claude Code hook script (bash + jq)
-- `public/` -- Single-file mobile web UI (plain HTML/CSS/JS, no build step)
+- `frontend/` -- React + Vite mobile web UI (built to `public/`)
+- `public/` -- Built frontend assets (served as static files)
 - `shared/` -- Shared TypeScript types and config constants
 - `bin/` -- CLI setup tool
 - `docs/` -- Design and architecture documents
@@ -14,10 +15,12 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - `server/index.ts` -- HTTP routes, WebSocket, static serving
 - `server/SessionManager.ts` -- Session lifecycle, auto-discovery, health checks
 - `server/EventProcessor.ts` -- Event ingestion, dedup, JSONL file watching
-- `server/TmuxController.ts` -- Safe tmux wrappers (load-buffer/paste-buffer)
+- `server/TmuxController.ts` -- Safe tmux wrappers (load-buffer/paste-buffer, send-keys)
 - `server/MarkerParser.ts` -- rc marker regex parser
 - `hooks/remote-claude-hook.sh` -- Reads hook JSON from stdin, posts events to server
-- `public/index.html` -- Full dashboard UI with WebSocket, notifications, audio alerts
+- `frontend/src/App.tsx` -- Main React app component
+- `frontend/src/components/` -- React UI components (SessionCard, InputArea, PermissionPrompt, etc.)
+- `public/index.html` -- Built dashboard entry point
 - `shared/types.ts` -- ManagedSession, ClaudeEvent, RcMarker, WS protocol types
 - `shared/defaults.ts` -- Port (4080), data dir, timeouts, intervals
 
@@ -34,11 +37,13 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 5. Server broadcasts events via WebSocket to connected dashboards
 6. Dashboard shows session cards, event feeds, and prompt input
 7. Prompts sent via dashboard are delivered to the correct tmux pane
+8. Permission prompts can be approved/rejected from the dashboard via tmux keys
 
 ## Architecture Decisions
 - Sessions are auto-discovered from hook events, not from tmux session listing
 - Each event includes `tmuxTarget` (e.g. `Personal:3.0`) for precise pane targeting
 - No `rc-` prefix convention -- works with any existing tmux setup
+- Manually created sessions share a single `remote-claude` tmux session with named windows
 - Web Notifications API + Web Audio API for alerts (no service worker yet)
 - Frontend is now a React/Vite app in `frontend/` (replaces old single-file HTML)
 - `public/index.html` is a built artifact from the React frontend

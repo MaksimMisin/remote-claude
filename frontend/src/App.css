@@ -469,24 +469,29 @@ header h1 {
 #input-row {
   display: flex;
   gap: 6px;
-  align-items: center;
+  align-items: flex-end;
   padding: 6px 10px calc(6px + var(--safe-b));
 }
 
-#input-row input[type="text"] {
+#input-row textarea {
   flex: 1;
   min-width: 0;
-  height: 40px;
+  min-height: 40px;
+  max-height: 150px;
   border-radius: 10px;
   border: 1px solid #3A3A3C;
   background: #2C2C2E;
   color: #fff;
-  padding: 0 10px;
+  padding: 8px 10px;
   font-size: 16px;
+  font-family: inherit;
   outline: none;
+  resize: none;
+  overflow-y: auto;
+  field-sizing: content;
 }
 
-#input-row input[type="text"]:focus {
+#input-row textarea:focus {
   border-color: var(--blue);
 }
 
@@ -705,4 +710,142 @@ header h1 {
   border-radius: 4px;
   accent-color: var(--blue);
   cursor: pointer;
+}
+
+/* --- Permission Prompt --- */
+
+.permission-prompt {
+  margin-top: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #5A4A20;
+}
+
+.perm-header {
+  padding: 8px 12px;
+  background: #3D3520;
+  color: var(--amber);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.perm-body {
+  padding: 8px 12px;
+  background: #1C1C1E;
+}
+
+.perm-detail {
+  font-size: 13px;
+  color: #D1D1D6;
+}
+
+.perm-file {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 13px;
+  color: var(--blue);
+  margin-bottom: 6px;
+}
+
+.perm-desc {
+  color: #D1D1D6;
+  margin-bottom: 4px;
+}
+
+.perm-diff {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  white-space: pre;
+}
+
+.diff-del {
+  color: #FF6B6B;
+  background: rgba(255, 69, 58, 0.1);
+}
+
+.diff-add {
+  color: #69DB7C;
+  background: rgba(48, 209, 88, 0.1);
+}
+
+.diff-trunc {
+  color: var(--text2);
+  font-style: italic;
+  margin-top: 4px;
+}
+
+.perm-command {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #D1D1D6;
+  background: #2C2C2E;
+  padding: 8px 10px;
+  border-radius: 6px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+.perm-question {
+  color: #D1D1D6;
+  font-size: 14px;
+  line-height: 1.4;
+  margin-bottom: 6px;
+}
+
+.perm-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.perm-option {
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: #3A3A3C;
+  color: var(--blue);
+  font-size: 12px;
+}
+
+.perm-tool-name {
+  color: var(--text2);
+  font-size: 13px;
+}
+
+.perm-actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #1C1C1E;
+  border-top: 1px solid #3A3A3C;
+}
+
+.perm-btn {
+  flex: 1;
+  height: 44px;
+  border-radius: 10px;
+  border: none;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  color: #fff;
+}
+
+.perm-btn-yes {
+  background: var(--green);
+}
+
+.perm-btn-all {
+  background: var(--blue);
+}
+
+.perm-btn-no {
+  background: #48484A;
+  color: var(--red);
 }

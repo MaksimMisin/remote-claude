@@ -107,14 +107,15 @@ export class SessionManager {
     return undefined;
   }
 
-  /** Create a new session, spawn tmux. */
+  /** Create a new session as a window in the shared tmux session. */
   async create(name: string, cwd: string, flags?: string): Promise<ManagedSession> {
     const id = randomBytes(4).toString('hex');
-    const tmuxSession = await tmux.createSession(id, cwd, flags);
+    const tmuxTarget = await tmux.createSession(id, cwd, name, flags);
     const session: ManagedSession = {
       id,
       name,
-      tmuxSession,
+      tmuxSession: 'remote-claude',
+      tmuxTarget,
       status: 'idle',
       createdAt: Date.now(),
       lastActivity: Date.now(),
@@ -127,14 +128,17 @@ export class SessionManager {
     return session;
   }
 
-  /** Delete a session, kill tmux. */
+  /** Delete a session, kill its tmux window. */
   async remove(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session) return false;
-    try {
-      await tmux.killSession(session.tmuxSession);
-    } catch {
-      // tmux session may already be dead
+    const target = session.tmuxTarget;
+    if (target) {
+      try {
+        await tmux.killWindow(target);
+      } catch {
+        // Window may already be dead
+      }
     }
     this.sessions.delete(id);
     this.save();

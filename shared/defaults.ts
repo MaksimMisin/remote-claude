@@ -13,4 +13,5 @@ export const WORKING_TIMEOUT_MS = 120_000;
 export const MAX_HISTORY_EVENTS = 200;
 export const WS_PING_INTERVAL_MS = 30_000;
 
-export const TMUX_SESSION_PREFIX = 'rc-';
+export const TMUX_SESSION_PREFIX = 'rc-'; // legacy, kept for reference
+export const TMUX_SESSION_NAME = 'remote-claude';
