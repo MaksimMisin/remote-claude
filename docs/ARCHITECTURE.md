@@ -1,0 +1,264 @@
+# Remote Claude -- Technical Architecture
+
+**System for monitoring and controlling multiple Claude Code CLI sessions running in tmux from a mobile web browser.**
+
+---
+
+## 1. System Overview
+
+### Data Flow
+
+```
+Claude Code (in tmux pane)
+    |
+    | Hook fires (stdin JSON: hook_event_name, session_id, cwd, tool_name, etc.)
+    v
+Hook Script (remote-claude-hook.sh)
+    |
+    | 1. Detects tmux pane via TMUX_PANE env var -> tmuxTarget (e.g. "Personal:3.0")
+    | 2. Appends ClaudeEvent JSON to ~/.remote-claude/data/events.jsonl
+    | 3. POSTs ClaudeEvent JSON to http://localhost:4080/event (backgrounded)
+    v
+Server (Node.js + TypeScript, port 4080)
+    |
+    | 1. EventProcessor deduplicates + stores event
+    | 2. SessionManager auto-discovers session or updates existing
+    | 3. Broadcasts via WebSocket to all connected clients
+    v
+Mobile Web Dashboard (plain HTML/CSS/JS)
+    |
+    | Displays session cards, event feeds, status indicators
+    | Sends prompts via POST /api/sessions/:id/prompt
+    | Triggers Web Notifications + audio alerts on status changes
+    v
+Server delivers prompt to tmux pane via load-buffer/paste-buffer
+```
+
+### Key Design Decisions
+
+1. **Hook-based event capture** -- Claude Code's hook system provides structured JSON events via stdin. No terminal scraping needed.
+
+2. **Auto-discovery from hook events** -- Sessions appear automatically when any Claude Code instance fires a hook event. No manual session creation or `rc-` prefix convention needed. Works with any existing tmux setup.
+
+3. **tmuxTarget for pane precision** -- Each hook event includes the exact tmux target (`session:window.pane`), allowing prompts to be delivered to the correct pane even when multiple Claude instances run in the same tmux session.
+
+4. **Dual delivery** (file + HTTP) -- Hook writes to JSONL file AND posts to server. File provides crash recovery (server watches with chokidar); HTTP provides low-latency delivery. Server deduplicates via event IDs.
+
+5. **Single-file frontend** -- Plain HTML with inline CSS/JS. No build step, no framework, no dependencies. Served as a static file by the server.
+
+6. **Web Notifications + Audio** -- Uses browser Notification API for push alerts and Web Audio API for sound alerts. Works when phone screen is off. No service worker needed for basic notifications.
+
+---
+
+## 2. Hook Script
+
+**File:** `hooks/remote-claude-hook.sh` (installed to `~/.remote-claude/hooks/`)
+
+### Input
+Claude Code passes JSON to stdin with fields:
+- `hook_event_name` -- PreToolUse, PostToolUse, Stop, UserPromptSubmit, SessionStart, SessionEnd, Notification
+- `session_id` -- Claude Code's internal session UUID
+- `cwd` -- Working directory
+- `tool_name`, `tool_input` -- For tool use events
+- `transcript_path` -- For Stop events (path to conversation JSONL)
+
+### Processing
+1. Reads JSON from stdin with `jq`
+2. Maps `hook_event_name` to internal event types (e.g. `PreToolUse` -> `pre_tool_use`)
+3. Extracts `session_id` and `cwd` from JSON (not env vars)
+4. Detects tmux target via `tmux display-message -t $TMUX_PANE -p '#{session_name}:#{window_index}.#{pane_index}'`
+5. For `Stop` events: searches last 10 lines of transcript backwards for the assistant message (transcript ends with system/progress entries), extracts `<!--rc:CATEGORY:MESSAGE-->` markers via perl regex
+6. Generates unique event ID: `{sessionId}-{timestampMs}-{randomHex}`
+7. Builds ClaudeEvent JSON with `jq`
+
+### Output
+- Appends JSON line to `~/.remote-claude/data/events.jsonl`
+- POSTs JSON to `http://localhost:4080/event` (backgrounded, fire-and-forget)
+
+### Dependencies
+- `jq` (JSON processing)
+- `perl` (millisecond timestamps on macOS, marker regex)
+- `xxd` (random hex generation)
+- `curl` (HTTP POST to server)
+
+---
+
+## 3. Server Components
+
+### 3.1 index.ts -- Main Entry
+
+HTTP server on `0.0.0.0:4080` with routes:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/health` | Server health + stats |
+| GET | `/api/sessions` | List all tracked sessions |
+| GET | `/api/debug` | Debug info (sessions, events, uptime) |
+| POST | `/api/sessions` | Create managed tmux session |
+| POST | `/api/sessions/:id/prompt` | Send prompt to session's tmux pane |
+| POST | `/api/sessions/:id/cancel` | Send Ctrl+C to session |
+| DELETE | `/api/sessions/:id` | Kill session |
+| POST | `/event` | Ingest hook event |
+
+WebSocket on `/ws` upgrade. On connect, sends: `connected`, `sessions`, per-session `history` (last 50 events per session). Streams `event`, `session_update`, `marker` messages in real-time.
+
+Static file serving from `public/` directory.
+
+### 3.2 SessionManager.ts -- Session Lifecycle
+
+**Auto-discovery:** When an event arrives with an unknown `sessionId`, creates a new session automatically:
+- `id` = first 8 chars of Claude session UUID
+- `name` = last component of cwd (e.g. "remote-claude")
+- `tmuxTarget` = from event (e.g. "Personal:3.0")
+
+**Status tracking from hook events:**
+| Event Type | Status Transition |
+|-----------|-------------------|
+| `user_prompt_submit` | -> working |
+| `pre_tool_use` | -> working (sets currentTool) |
+| `post_tool_use` | -> working |
+| `stop` | -> idle |
+| `notification` | -> waiting |
+| `session_start` | -> idle |
+| `session_end` | -> idle |
+
+**Health checks** (every 5s): Queries `tmux list-sessions` to verify session's tmux session is still alive. For auto-discovered sessions, extracts tmux session name from `tmuxTarget`. Marks unreachable sessions as `offline`.
+
+**Working timeout:** If a session stays in `working` for >2 minutes without events, transitions to `idle`.
+
+**Prompt delivery:** Uses `resolveTarget()` to prefer `tmuxTarget` over `tmuxSession`. Delegates to TmuxController.
+
+### 3.3 EventProcessor.ts -- Event Ingestion
+
+- **Per-session** in-memory event store (max 100 events per session) -- prevents one active session from evicting another's history
+- Deduplication via Set of event IDs
+- Parses rc markers from `assistantText` if not already set
+- Watches JSONL file with chokidar for crash recovery (reads new lines from offset)
+- `getSessionHistory(sessionId)` returns events for a specific session
+
+### 3.4 TmuxController.ts -- tmux Wrappers
+
+- `listSessions()` -- Returns all tmux session names
+- `createSession(id, cwd)` -- Spawns new tmux session running `claude`
+- `sendPrompt(target, text)` -- Safe text injection via load-buffer/paste-buffer + Enter
+- `sendCancel(target)` -- Sends Ctrl+C
+- `killSession(session)` -- Kills tmux session
+
+Target validation: `/^[a-zA-Z0-9_:.\-]+$/` (supports `session:window.pane` format).
+
+### 3.5 MarkerParser.ts -- rc Marker Parsing
+
+Parses `<!--rc:CATEGORY:MESSAGE-->` and escaped variant `<\!--rc:...-->`.
+Returns `{ category, message }` or null. Validates against known categories.
+
+---
+
+## 4. Frontend (public/index.html)
+
+Single-file mobile web UI (~500 lines) with inline CSS and vanilla JavaScript.
+
+### Features
+- **Session cards** sorted by priority: waiting > working > idle > offline
+- **Status dots**: green pulse (working), amber fast pulse (waiting), blue static (idle), gray (offline)
+- **Human-readable event feed** per selected session (newest first):
+  - Filters out `pre_tool_use` events (only shows `post_tool_use` to avoid duplicates)
+  - Bash commands show their `description` field instead of raw commands
+  - File operations show just the filename, not the full path
+  - MCP tools (browser automation) parsed to readable names ("Taking screenshot", "Clicking", "Navigating")
+  - Agent tasks show their description ("Agent: Check Chrome dashboard state")
+  - **User prompts** shown in blue bubbles with the prompt text
+  - **Claude responses** shown in gray bubbles on stop events (from transcript)
+  - Error states shown in red
+- **Prompt input** fixed to bottom with Send/Cancel buttons
+- **Session switching** by tapping cards
+- **WebSocket** with auto-reconnect (exponential backoff 1s -> 30s)
+- **Web Notifications** for status changes (working->idle, working->waiting)
+- **Audio alerts** via Web Audio API (urgent two-tone for waiting, gentle chime for finished)
+- **Vibration** on mobile for attention-needed events
+- **Bell button** to toggle notifications + initialize AudioContext
+
+### Notification Triggers
+| Trigger | Sound | Vibration | Web Notification |
+|---------|-------|-----------|-----------------|
+| working -> waiting | Urgent two-tone | 200-100-200ms | Yes, persistent |
+| working -> idle | Gentle chime | 100ms | Yes |
+| Marker: question/error | Urgent two-tone | 200-100-200ms | Yes, persistent |
+| Marker: finished/summary/notification | Gentle chime | 100ms | Yes |
+| Marker: silent/progress | None | None | None |
+
+### Design
+- Dark theme: #1C1C1E bg, #2C2C2E cards
+- Mobile-first with safe-area-inset handling
+- apple-mobile-web-app-capable for iOS standalone mode
+- prefers-reduced-motion support
+- All touch targets minimum 44px
+
+---
+
+## 5. Shared Types
+
+### ManagedSession
+```typescript
+interface ManagedSession {
+  id: string;              // Short ID (first 8 chars of Claude session UUID)
+  name: string;            // Display name (from cwd)
+  tmuxSession: string;     // tmux session name (for managed sessions)
+  tmuxTarget?: string;     // Full target "session:window.pane" (from hook)
+  status: SessionStatus;   // idle | working | waiting | offline
+  createdAt: number;
+  lastActivity: number;
+  cwd: string;
+  currentTool?: string;
+  claudeSessionId?: string;
+  lastMarker?: RcMarker;
+}
+```
+
+### ClaudeEvent
+```typescript
+interface ClaudeEvent {
+  id: string;              // Unique: sessionId-timestamp-randomHex
+  timestamp: number;       // Milliseconds
+  type: HookEventType;     // pre_tool_use | post_tool_use | stop | etc.
+  sessionId: string;       // Claude Code session UUID
+  cwd: string;
+  tool?: string;
+  toolInput?: Record<string, unknown>;
+  toolUseId?: string;
+  success?: boolean;
+  error?: string;
+  assistantText?: string;  // Last ~200 chars of assistant response (stop events)
+  marker?: RcMarker;       // Parsed rc marker
+  tmuxTarget?: string;     // "session:window.pane"
+}
+```
+
+---
+
+## 6. Setup & Security
+
+### Setup Process (npm run setup)
+1. Creates `~/.remote-claude/data/` and `~/.remote-claude/hooks/`
+2. Copies hook script, makes executable
+3. Registers hooks in `~/.claude/settings.json` for all 7 event types
+4. Generates 32-byte auth token (saved to `auth-token.txt`, mode 0600)
+5. Prints server URL and LAN access URL with token
+
+### Security
+- **LAN-only by default** -- Server on 0.0.0.0:4080
+- **Tailscale recommended** for remote access
+- **Prompt injection safe** -- tmux load-buffer/paste-buffer avoids shell interpretation
+- **Target validation** -- Regex check on all tmux targets
+- **1MB body limit** on HTTP requests
+- **CORS** -- Allow-Origin: *
+
+---
+
+## 7. What's Not Built Yet
+- Voice/TTS (Web Speech API) -- deferred from MVP
+- Service Worker for offline + background push notifications
+- Permission prompt detection and response
+- Session spawn from web UI (API exists but untested from UI)
+- Auth token validation on API routes
+- QR code display for mobile setup
+- Multi-user support

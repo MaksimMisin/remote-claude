@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1C1C1E">
+<title>Remote Claude</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #1C1C1E; color: #fff;
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+:root {
+  --green: #30D158; --amber: #FFD60A; --blue: #0A84FF;
+  --gray: #636366; --red: #FF453A; --bg: #1C1C1E;
+  --card: #2C2C2E; --text2: #98989D;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
+}
+.dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+.dot-working { background: var(--green); animation: pulse 2s infinite; }
+.dot-waiting { background: var(--amber); animation: pulse 0.5s infinite; }
+.dot-idle { background: var(--blue); }
+.dot-offline { background: var(--gray); }
+#app { display: flex; flex-direction: column; height: 100%; padding-top: env(safe-area-inset-top, 0px); }
+header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; flex-shrink: 0; border-bottom: 1px solid #3A3A3C; }
+header h1 { font-size: 20px; font-weight: 700; }
+.header-right { display: flex; align-items: center; gap: 12px; }
+.conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--red); }
+.conn-dot.connected { background: var(--green); }
+.conn-dot.reconnecting { background: var(--amber); animation: pulse 1s infinite; }
+.btn-icon { width: 44px; height: 44px; border-radius: 22px; border: none; background: #3A3A3C; color: #fff; font-size: 24px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+#main { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 12px 16px 16px; }
+.card { background: var(--card); border-radius: 12px; padding: 12px; margin-bottom: 8px; cursor: pointer; min-height: 64px; border-left: 3px solid transparent; transition: border-color 0.2s; }
+.card.selected { border-left-color: var(--blue); }
+.card-waiting { border-left-color: var(--amber); }
+.card-header { display: flex; align-items: center; gap: 8px; }
+.card-name { font-size: 16px; font-weight: 600; flex: 1; }
+.card-time { font-size: 13px; color: var(--text2); white-space: nowrap; }
+.card-summary { font-size: 14px; color: var(--text2); margin-top: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-marker { font-size: 13px; color: var(--amber); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#event-feed { border-top: 1px solid #3A3A3C; margin-top: 8px; padding-top: 8px; }
+.feed-title { font-size: 13px; color: var(--text2); margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+.event-item { display: flex; gap: 8px; padding: 6px 0; font-size: 13px; border-bottom: 1px solid #2A2A2C; }
+.event-time { color: var(--text2); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.event-icon { width: 20px; text-align: center; flex-shrink: 0; }
+.event-desc { color: #D1D1D6; flex: 1; word-break: break-word; }
+.event-assistant { margin-top: 4px; padding: 6px 8px; background: #3A3A3C; border-radius: 6px; font-size: 13px; color: #D1D1D6; white-space: pre-wrap; word-break: break-word; }
+.event-prompt { margin-top: 4px; padding: 6px 8px; background: #1A3A5C; border-radius: 6px; font-size: 13px; color: #8BB8E8; white-space: pre-wrap; word-break: break-word; }
+.event-marker { margin-top: 4px; padding: 4px 8px; background: #3D3520; border-radius: 6px; font-size: 12px; color: var(--amber); }
+#input-area { display: none; flex-shrink: 0; padding: 8px 16px calc(8px + var(--safe-b)); border-top: 1px solid #3A3A3C; background: var(--bg); }
+#input-area.visible { display: flex; gap: 8px; align-items: center; }
+#input-area input { flex: 1; height: 44px; border-radius: 10px; border: 1px solid #3A3A3C; background: #2C2C2E; color: #fff; padding: 0 12px; font-size: 16px; outline: none; }
+#input-area input:focus { border-color: var(--blue); }
+#input-area button { height: 44px; padding: 0 16px; border-radius: 10px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; }
+.btn-send { background: var(--blue); color: #fff; }
+.btn-cancel { background: #3A3A3C; color: var(--red); }
+#banner { display: none; padding: 10px 16px; background: #3D3520; border-bottom: 1px solid #5A4A20; font-size: 14px; color: var(--amber); }
+#banner.visible { display: block; }
+#modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: flex-end; justify-content: center; }
+#modal-overlay.visible { display: flex; }
+#modal { background: #2C2C2E; width: 100%; max-width: 500px; border-radius: 16px 16px 0 0; padding: 20px 16px calc(20px + var(--safe-b)); }
+#modal h2 { font-size: 18px; margin-bottom: 16px; }
+#modal input { width: 100%; height: 44px; border-radius: 10px; border: 1px solid #3A3A3C; background: #1C1C1E; color: #fff; padding: 0 12px; font-size: 16px; margin-bottom: 12px; outline: none; }
+#modal input:focus { border-color: var(--blue); }
+.modal-btns { display: flex; gap: 8px; }
+.modal-btns button { flex: 1; height: 44px; border-radius: 10px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; }
+#no-sessions { text-align: center; color: var(--text2); padding: 40px 0; font-size: 15px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .dot-working, .dot-waiting, .conn-dot.reconnecting { animation: none; }
+}
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>Remote Claude</h1>
+    <div class="header-right">
+      <span id="version" style="font-size:12px;color:var(--text2)"></span>
+      <div class="conn-dot" id="conn-dot" title="Disconnected"></div>
+      <button class="btn-icon" id="btn-bell" title="Notifications" style="font-size:18px;opacity:0.4">🔔</button>
+      <button class="btn-icon" id="btn-new" title="New Session">+</button>
+    </div>
+  </header>
+  <div id="banner"></div>
+  <div id="main">
+    <div id="sessions"></div>
+    <div id="event-feed" style="display:none">
+      <div class="feed-title">Events</div>
+      <div id="events"></div>
+    </div>
+  </div>
+  <div id="input-area">
+    <input type="text" id="prompt-input" placeholder="Send a message..." enterkeyhint="send">
+    <button class="btn-send" id="btn-send">Send</button>
+    <button class="btn-cancel" id="btn-cancel">Cancel</button>
+  </div>
+</div>
+
+<div id="modal-overlay">
+  <div id="modal">
+    <h2>New Session</h2>
+    <input type="text" id="modal-name" placeholder="Session name">
+    <input type="text" id="modal-cwd" placeholder="Working directory">
+    <div class="modal-btns">
+      <button style="background:#3A3A3C;color:#fff" id="modal-cancel">Cancel</button>
+      <button style="background:var(--blue);color:#fff" id="modal-create">Create</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function() {
+  // --- State ---
+  let sessions = {};
+  let events = {};
+  let selectedId = null;
+  let ws = null;
+  let reconnectDelay = 1000;
+  let reconnectTimer = null;
+  let notificationsEnabled = false;
+  let audioCtx = null;
+
+  // --- Notifications ---
+  function initNotifications() {
+    if (!('Notification' in window)) return;
+    if (Notification.permission === 'granted') {
+      notificationsEnabled = true;
+      updateBellIcon();
+    } else if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then(function(perm) {
+        notificationsEnabled = perm === 'granted';
+        updateBellIcon();
+      });
+    }
+  }
+
+  function updateBellIcon() {
+    const $bell = document.getElementById('btn-bell');
+    if ($bell) $bell.style.opacity = notificationsEnabled ? '1' : '0.4';
+  }
+
+  function getAudioCtx() {
+    if (!audioCtx) {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioCtx;
+  }
+
+  function playSound(urgent) {
+    try {
+      const ctx = getAudioCtx();
+      if (ctx.state === 'suspended') ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.value = 0.3;
+      if (urgent) {
+        // Two-tone urgent alert
+        osc.frequency.value = 880;
+        osc.start(ctx.currentTime);
+        osc.frequency.setValueAtTime(660, ctx.currentTime + 0.15);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.3);
+        gain.gain.setValueAtTime(0.3, ctx.currentTime + 0.4);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.stop(ctx.currentTime + 0.5);
+      } else {
+        // Gentle chime
+        osc.frequency.value = 587;
+        osc.start(ctx.currentTime);
+        osc.frequency.setValueAtTime(784, ctx.currentTime + 0.1);
+        gain.gain.setValueAtTime(0.2, ctx.currentTime + 0.2);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+        osc.stop(ctx.currentTime + 0.4);
+      }
+    } catch(e) {}
+  }
+
+  function notifyUser(title, body, urgent) {
+    // Play sound
+    playSound(urgent);
+
+    // Vibrate on mobile
+    if (navigator.vibrate) {
+      navigator.vibrate(urgent ? [200, 100, 200] : [100]);
+    }
+
+    // Web Notification (only if page not focused)
+    if (notificationsEnabled && document.hidden) {
+      try {
+        const n = new Notification(title, {
+          body: body,
+          icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">' + (urgent ? '⚠️' : '✅') + '</text></svg>',
+          tag: 'rc-' + Date.now(),
+          requireInteraction: urgent,
+        });
+        n.onclick = function() { window.focus(); n.close(); };
+      } catch(e) {}
+    }
+  }
+  // --- DOM refs ---
+  const $sessions = document.getElementById('sessions');
+  const $events = document.getElementById('events');
+  const $eventFeed = document.getElementById('event-feed');
+  const $inputArea = document.getElementById('input-area');
+  const $promptInput = document.getElementById('prompt-input');
+  const $connDot = document.getElementById('conn-dot');
+  const $banner = document.getElementById('banner');
+  const $version = document.getElementById('version');
+
+  // --- Helpers ---
+  function relTime(ts) {
+    if (!ts) return '';
+    const d = Math.max(0, Math.floor((Date.now() - ts) / 1000));
+    if (d < 5) return 'now';
+    if (d < 60) return d + 's ago';
+    if (d < 3600) return Math.floor(d / 60) + 'm ago';
+    if (d < 86400) return Math.floor(d / 3600) + 'h ago';
+    return Math.floor(d / 86400) + 'd ago';
+  }
+
+  function fmtTime(ts) {
+    const d = new Date(ts);
+    return d.toTimeString().slice(0, 8);
+  }
+
+  function basename(path) {
+    if (!path) return '';
+    return path.split('/').pop() || path;
+  }
+
+  function humanizeMcpTool(tool, inp) {
+    var match = tool.match(/^mcp__[^_]+__(.+)$/);
+    if (!match) return tool;
+    var action = match[1];
+    var names = {
+      'computer': null, // handled below with action detail
+      'read_page': 'Reading page',
+      'navigate': inp && inp.url ? 'Opening ' + truncate(inp.url, 30) : 'Navigating',
+      'tabs_context_mcp': 'Getting tab context',
+      'tabs_create_mcp': 'Creating tab',
+      'find': inp && inp.query ? 'Finding: ' + truncate(inp.query, 30) : 'Finding element',
+      'form_input': 'Filling form field',
+      'javascript_tool': 'Running JavaScript',
+      'get_page_text': 'Reading page text',
+      'resize_window': 'Resizing window',
+      'gif_creator': 'Recording GIF',
+      'upload_image': 'Uploading image',
+      'update_plan': 'Updating plan',
+      'read_console_messages': 'Reading console',
+      'read_network_requests': 'Reading network',
+      'shortcuts_list': 'Listing shortcuts',
+      'shortcuts_execute': 'Running shortcut',
+    };
+    if (action === 'computer' || names[action] === null) {
+      var ca = (inp && inp.action) || '';
+      var computerActions = {
+        'screenshot': 'Taking screenshot',
+        'left_click': 'Clicking',
+        'right_click': 'Right-clicking',
+        'double_click': 'Double-clicking',
+        'triple_click': 'Triple-clicking',
+        'type': 'Typing',
+        'key': 'Pressing key',
+        'scroll': 'Scrolling',
+        'scroll_to': 'Scrolling to element',
+        'wait': 'Waiting',
+        'hover': 'Hovering',
+        'left_click_drag': 'Dragging',
+        'zoom': 'Zooming in',
+      };
+      return computerActions[ca] || 'Browser action';
+    }
+    return names[action] || action.replace(/_/g, ' ');
+  }
+
+  function toolIcon(tool) {
+    if (!tool) return '\u{2022}';
+    if (tool.startsWith('mcp__')) return '\u{1F310}';
+    var icons = {
+      Read: '\u{1F4D6}', Write: '\u{270F}\u{FE0F}', Edit: '\u{1F527}',
+      Bash: '\u{1F4BB}', Grep: '\u{1F50D}', Glob: '\u{1F50D}',
+      WebFetch: '\u{1F310}', WebSearch: '\u{1F310}', Task: '\u{1F500}',
+      NotebookEdit: '\u{1F4D3}', AskUserQuestion: '\u{2753}',
+      TaskCreate: '\u{1F4CB}', TaskUpdate: '\u{1F4CB}',
+    };
+    return icons[tool] || '\u{2022}';
+  }
+
+  function eventDesc(ev) {
+    var t = ev.tool;
+    var inp = ev.toolInput || {};
+    if (ev.type === 'stop') return ev.marker ? ev.marker.message : 'Finished';
+    if (ev.type === 'session_start') return 'Session started';
+    if (ev.type === 'session_end') return 'Session ended';
+    if (ev.type === 'user_prompt_submit') return 'Prompt';
+    if (ev.type === 'notification') return ev.marker ? ev.marker.message : 'Waiting for input';
+    if (!t) return ev.type;
+    // MCP tools
+    if (t.startsWith('mcp__')) return humanizeMcpTool(t, inp);
+    // Standard Claude Code tools
+    if (t === 'Bash') return inp.description || ('$ ' + truncate(inp.command || '', 50));
+    if (t === 'Read') return 'Reading ' + basename(inp.file_path);
+    if (t === 'Edit') return 'Editing ' + basename(inp.file_path);
+    if (t === 'Write') return 'Writing ' + basename(inp.file_path);
+    if (t === 'Grep') return 'Searching: ' + truncate(inp.pattern || '', 40);
+    if (t === 'Glob') return 'Finding: ' + truncate(inp.pattern || '', 40);
+    if (t === 'WebFetch') return 'Fetching ' + truncate(inp.url || '', 40);
+    if (t === 'WebSearch') return 'Web search: ' + truncate(inp.query || '', 40);
+    if (t === 'Task') return 'Agent: ' + truncate(inp.description || '', 50);
+    if (t === 'AskUserQuestion') return 'Asking a question';
+    if (t === 'TaskCreate' || t === 'TaskUpdate') return 'Updating tasks';
+    return t + (inp.file_path ? ': ' + basename(inp.file_path) : '');
+  }
+
+  function truncate(s, n) {
+    if (!s) return '';
+    return s.length > n ? s.slice(0, n) + '\u2026' : s;
+  }
+
+  function humanizeCurrentTool(tool) {
+    if (!tool) return 'Working...';
+    if (tool.startsWith('mcp__')) {
+      var m = tool.match(/^mcp__[^_]+__(.+)$/);
+      if (m) {
+        var act = m[1];
+        if (act === 'computer') return 'Using browser';
+        if (act === 'read_page') return 'Reading page';
+        if (act === 'navigate') return 'Navigating browser';
+        return act.replace(/_/g, ' ');
+      }
+    }
+    if (tool === 'Bash') return 'Running command';
+    if (tool === 'Read') return 'Reading file';
+    if (tool === 'Write') return 'Writing file';
+    if (tool === 'Edit') return 'Editing file';
+    if (tool === 'Grep') return 'Searching code';
+    if (tool === 'Glob') return 'Finding files';
+    if (tool === 'Task') return 'Running agent';
+    if (tool === 'WebSearch') return 'Searching web';
+    if (tool === 'WebFetch') return 'Fetching page';
+    if (tool === 'AskUserQuestion') return 'Asking question';
+    return tool;
+  }
+
+  function actionSummary(session) {
+    if (session.status === 'offline') return 'Disconnected';
+    if (session.status === 'waiting') return session.lastMarker ? session.lastMarker.message : 'Waiting for input';
+    if (session.lastMarker && session.status === 'idle') return session.lastMarker.message;
+    if (session.currentTool) return humanizeCurrentTool(session.currentTool);
+    if (session.status === 'working') return 'Working...';
+    return 'Idle';
+  }
+
+  const STATUS_ORDER = { waiting: 0, working: 1, idle: 2, offline: 3 };
+
+  function sortedSessions() {
+    return Object.values(sessions).sort((a, b) => {
+      const oa = STATUS_ORDER[a.status] ?? 9;
+      const ob = STATUS_ORDER[b.status] ?? 9;
+      if (oa !== ob) return oa - ob;
+      return (b.lastActivity || 0) - (a.lastActivity || 0);
+    });
+  }
+
+  // --- Render ---
+  function renderSessions() {
+    const sorted = sortedSessions();
+    if (sorted.length === 0) {
+      $sessions.innerHTML = '<div id="no-sessions">No sessions yet.<br>Tap + to create one.</div>';
+      return;
+    }
+    let html = '';
+    for (const s of sorted) {
+      const sel = s.id === selectedId;
+      const wc = s.status === 'waiting' ? ' card-waiting' : '';
+      html += '<div class="card' + (sel ? ' selected' : '') + wc + '" data-id="' + s.id + '">'
+        + '<div class="card-header">'
+        + '<div class="dot dot-' + s.status + '"></div>'
+        + '<div class="card-name">' + esc(s.name || s.id) + '</div>'
+        + '<div class="card-time">' + relTime(s.lastActivity) + '</div>'
+        + '</div>'
+        + '<div class="card-summary">' + esc(actionSummary(s)) + '</div>';
+      if (s.lastMarker && s.status === 'waiting') {
+        html += '<div class="card-marker">' + esc(s.lastMarker.message) + '</div>';
+      }
+      html += '</div>';
+    }
+    $sessions.innerHTML = html;
+    $sessions.querySelectorAll('.card').forEach(el => {
+      el.addEventListener('click', () => selectSession(el.dataset.id));
+    });
+  }
+
+  function renderEvents() {
+    if (!selectedId) {
+      $eventFeed.style.display = 'none';
+      return;
+    }
+    // Filter out pre_tool_use (post_tool_use has the same info + success status)
+    var evts = (events[selectedId] || []).slice()
+      .filter(function(ev) { return ev.type !== 'pre_tool_use'; })
+      .sort(function(a, b) { return b.timestamp - a.timestamp; });
+    if (evts.length === 0) {
+      $eventFeed.style.display = 'none';
+      return;
+    }
+    $eventFeed.style.display = '';
+    var html = '';
+    for (var i = 0; i < evts.length; i++) {
+      var ev = evts[i];
+      var icon = ev.type === 'stop' ? '\u2705' :
+                 ev.type === 'user_prompt_submit' ? '\u{1F4AC}' :
+                 ev.type === 'notification' ? '\u{1F514}' :
+                 ev.type === 'session_start' ? '\u{1F680}' :
+                 toolIcon(ev.tool);
+      // Dim tool events, highlight prompts/stops/notifications
+      var isHighlight = ev.type === 'stop' || ev.type === 'user_prompt_submit' || ev.type === 'notification';
+      html += '<div class="event-item" style="' + (isHighlight ? 'padding:8px 0;' : '') + '">'
+        + '<span class="event-time">' + fmtTime(ev.timestamp) + '</span>'
+        + '<span class="event-icon">' + icon + '</span>'
+        + '<span class="event-desc">' + esc(eventDesc(ev));
+      // Show user's prompt text
+      if (ev.type === 'user_prompt_submit' && ev.assistantText) {
+        html += '<div class="event-prompt">' + esc(truncate(ev.assistantText, 300)) + '</div>';
+      }
+      // Show Claude's response on stop
+      if (ev.type === 'stop' && ev.assistantText) {
+        html += '<div class="event-assistant">' + esc(truncate(ev.assistantText, 300)) + '</div>';
+      }
+      // Show marker badge
+      if (ev.marker && ev.type !== 'stop') {
+        html += '<div class="event-marker">' + esc(ev.marker.category) + ': ' + esc(ev.marker.message) + '</div>';
+      }
+      // Show errors
+      if (ev.error) {
+        html += '<div class="event-assistant" style="color:var(--red)">\u274C ' + esc(ev.error) + '</div>';
+      }
+      // Show success/failure badge for tool calls
+      if (ev.success === false && !ev.error) {
+        html += '<div style="color:var(--red);font-size:12px;margin-top:2px">\u274C Failed</div>';
+      }
+      html += '</span></div>';
+    }
+    $events.innerHTML = html;
+  }
+
+  function selectSession(id) {
+    if (selectedId === id) {
+      selectedId = null;
+      $inputArea.classList.remove('visible');
+    } else {
+      selectedId = id;
+      $inputArea.classList.add('visible');
+      // Request history from server
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'select_session', payload: { sessionId: id } }));
+      }
+    }
+    renderSessions();
+    renderEvents();
+  }
+
+  function esc(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  // --- WebSocket ---
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = proto + '//' + location.host + '/ws';
+    ws = new WebSocket(url);
+    setConnState('reconnecting');
+
+    ws.onopen = function() {
+      setConnState('connected');
+      reconnectDelay = 1000;
+      ws.send(JSON.stringify({ type: 'subscribe' }));
+    };
+
+    ws.onmessage = function(e) {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }
+      handleMessage(msg);
+    };
+
+    ws.onclose = function() {
+      setConnState('disconnected');
+      scheduleReconnect();
+    };
+
+    ws.onerror = function() {
+      ws.close();
+    };
+  }
+
+  function scheduleReconnect() {
+    if (reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+      connect();
+    }, reconnectDelay);
+  }
+
+  function setConnState(state) {
+    $connDot.className = 'conn-dot' + (state === 'connected' ? ' connected' : state === 'reconnecting' ? ' reconnecting' : '');
+    $connDot.title = state.charAt(0).toUpperCase() + state.slice(1);
+  }
+
+  function handleMessage(msg) {
+    switch (msg.type) {
+      case 'connected':
+        if (msg.payload && msg.payload.version) {
+          $version.textContent = 'v' + msg.payload.version;
+        }
+        break;
+      case 'sessions':
+        sessions = {};
+        (msg.payload || []).forEach(s => sessions[s.id] = s);
+        renderSessions();
+        renderEvents();
+        break;
+      case 'session_update':
+        if (msg.payload) {
+          var prev = sessions[msg.payload.id];
+          var prevStatus = prev ? prev.status : null;
+          sessions[msg.payload.id] = msg.payload;
+          renderSessions();
+          if (msg.payload.id === selectedId) renderEvents();
+          // Notify on important status transitions
+          var s = msg.payload;
+          if (prevStatus === 'working' && s.status === 'waiting') {
+            notifyUser(s.name + ' needs input', s.lastMarker ? s.lastMarker.message : 'Waiting for your response', true);
+          } else if (prevStatus === 'working' && s.status === 'idle') {
+            notifyUser(s.name + ' finished', s.lastMarker ? s.lastMarker.message : 'Task complete', false);
+          } else if (s.status === 'waiting' && prevStatus !== 'waiting') {
+            notifyUser(s.name + ' needs input', s.lastMarker ? s.lastMarker.message : 'Waiting for your response', true);
+          }
+        }
+        break;
+      case 'event':
+        if (msg.payload) {
+          addEvent(msg.payload);
+        }
+        break;
+      case 'history':
+        if (Array.isArray(msg.payload)) {
+          msg.payload.forEach(ev => addEvent(ev, true));
+          renderEvents();
+        }
+        break;
+      case 'marker':
+        if (msg.payload) {
+          showBanner(msg.payload.marker, msg.payload.sessionId);
+        }
+        break;
+    }
+  }
+
+  // Map Claude sessionId (UUID) to our short session id
+  function resolveSessionId(claudeSessionId) {
+    for (const s of Object.values(sessions)) {
+      if (s.claudeSessionId === claudeSessionId) return s.id;
+    }
+    return claudeSessionId; // fallback
+  }
+
+  function addEvent(ev, bulk) {
+    const sid = resolveSessionId(ev.sessionId);
+    if (!events[sid]) events[sid] = [];
+    // Avoid duplicates
+    if (!events[sid].some(e => e.id === ev.id)) {
+      events[sid].push(ev);
+      // Keep last 200 events per session
+      if (events[sid].length > 200) events[sid] = events[sid].slice(-200);
+    }
+    if (!bulk && sid === selectedId) renderEvents();
+  }
+
+  function showBanner(marker, sessionId) {
+    if (!marker) return;
+    var sName = '';
+    // Resolve session name from Claude sessionId
+    for (var s of Object.values(sessions)) {
+      if (s.id === sessionId || s.claudeSessionId === sessionId) { sName = s.name; break; }
+    }
+    $banner.textContent = (sName ? sName + ': ' : '') + marker.message;
+    $banner.classList.add('visible');
+    setTimeout(() => $banner.classList.remove('visible'), 8000);
+    // Notify for important marker categories
+    var urgent = marker.category === 'question' || marker.category === 'error';
+    if (marker.category !== 'silent' && marker.category !== 'progress') {
+      notifyUser(
+        sName || 'Claude',
+        marker.message,
+        urgent
+      );
+    }
+  }
+
+  // --- API calls ---
+  function apiPost(path, body) {
+    return fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  }
+
+  // Send prompt
+  document.getElementById('btn-send').addEventListener('click', sendPrompt);
+  $promptInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
+  });
+
+  function sendPrompt() {
+    const text = $promptInput.value.trim();
+    if (!text || !selectedId) return;
+    apiPost('/api/sessions/' + selectedId + '/prompt', { text: text });
+    $promptInput.value = '';
+  }
+
+  // Cancel
+  document.getElementById('btn-cancel').addEventListener('click', function() {
+    if (!selectedId) return;
+    apiPost('/api/sessions/' + selectedId + '/cancel', {});
+  });
+
+  // New session modal
+  document.getElementById('btn-new').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.add('visible');
+    document.getElementById('modal-name').focus();
+  });
+
+  document.getElementById('modal-cancel').addEventListener('click', function() {
+    document.getElementById('modal-overlay').classList.remove('visible');
+  });
+
+  document.getElementById('modal-overlay').addEventListener('click', function(e) {
+    if (e.target === this) this.classList.remove('visible');
+  });
+
+  document.getElementById('modal-create').addEventListener('click', function() {
+    const name = document.getElementById('modal-name').value.trim();
+    const cwd = document.getElementById('modal-cwd').value.trim();
+    if (!name) return;
+    apiPost('/api/sessions', { name: name, cwd: cwd || undefined });
+    document.getElementById('modal-name').value = '';
+    document.getElementById('modal-cwd').value = '';
+    document.getElementById('modal-overlay').classList.remove('visible');
+  });
+
+  // --- Live relative time updates ---
+  setInterval(renderSessions, 30000);
+
+  // --- Bell button: request notification permission ---
+  document.getElementById('btn-bell').addEventListener('click', function() {
+    if (!('Notification' in window)) {
+      alert('Notifications not supported in this browser');
+      return;
+    }
+    // Need user gesture to init AudioContext too
+    getAudioCtx();
+    if (Notification.permission === 'granted') {
+      notificationsEnabled = !notificationsEnabled;
+      updateBellIcon();
+      playSound(false); // test sound
+    } else if (Notification.permission === 'denied') {
+      alert('Notifications blocked. Enable in browser settings.');
+    } else {
+      Notification.requestPermission().then(function(perm) {
+        notificationsEnabled = perm === 'granted';
+        updateBellIcon();
+        if (notificationsEnabled) playSound(false);
+      });
+    }
+  });
+
+  // --- Init ---
+  connect();
+  renderSessions();
+  // Auto-enable notifications if already granted
+  if ('Notification' in window && Notification.permission === 'granted') {
+    notificationsEnabled = true;
+    updateBellIcon();
+  }
+})();
+</script>
+</body>
+</html>
