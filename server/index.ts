@@ -4,8 +4,9 @@
 // ============================================================
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { join, extname } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { SERVER_PORT, DATA_DIR } from '../shared/defaults.js';
 import type { ClaudeEvent, ServerMessage } from '../shared/types.js';
@@ -13,11 +14,14 @@ import { SessionManager } from './SessionManager.js';
 import { EventProcessor } from './EventProcessor.js';
 import { mkdirSync } from 'node:fs';
 
+const UPLOADS_DIR = join(DATA_DIR, 'uploads');
+
 const VERSION = '0.1.0';
 const PUBLIC_DIR = join(import.meta.dirname, '..', 'public');
 
-// Ensure data directory exists
+// Ensure data directories exist
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 
 // --- WebSocket client management ---
 
@@ -59,9 +63,10 @@ function readBody(req: IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
+    const limit = 10_000_000; // 10MB for image uploads
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 1_000_000) {
+      if (size > limit) {
         req.destroy();
         reject(new Error('Body too large'));
         return;
@@ -228,9 +233,31 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
       if (route.action === 'prompt' && method === 'POST') {
         const body = await readBody(req);
-        const { text } = JSON.parse(body) as { text: string };
-        if (!text) return error(res, 'Missing text');
-        await sessionManager.sendPrompt(route.id, text);
+        const parsed = JSON.parse(body) as {
+          text?: string;
+          image?: { name: string; base64: string; mimeType: string };
+        };
+        let promptText = parsed.text || '';
+
+        // Handle image upload
+        if (parsed.image && parsed.image.base64) {
+          const ext = parsed.image.mimeType === 'image/png' ? '.png'
+            : parsed.image.mimeType === 'image/gif' ? '.gif'
+            : parsed.image.mimeType === 'image/webp' ? '.webp'
+            : '.jpg';
+          const filename = `${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
+          const filepath = join(UPLOADS_DIR, filename);
+          const buffer = Buffer.from(parsed.image.base64, 'base64');
+          writeFileSync(filepath, buffer);
+          console.log(`[Upload] Saved ${filepath} (${buffer.length} bytes)`);
+
+          // Prepend image reference to prompt
+          const imageRef = `[User uploaded image: ${filepath}]\n`;
+          promptText = imageRef + promptText;
+        }
+
+        if (!promptText.trim()) return error(res, 'Missing text or image');
+        await sessionManager.sendPrompt(route.id, promptText);
         return json(res, { ok: true });
       }
 

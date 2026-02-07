@@ -56,11 +56,18 @@ header h1 { font-size: 20px; font-weight: 700; }
 .event-assistant { margin-top: 4px; padding: 6px 8px; background: #3A3A3C; border-radius: 6px; font-size: 13px; color: #D1D1D6; white-space: pre-wrap; word-break: break-word; }
 .event-prompt { margin-top: 4px; padding: 6px 8px; background: #1A3A5C; border-radius: 6px; font-size: 13px; color: #8BB8E8; white-space: pre-wrap; word-break: break-word; }
 .event-marker { margin-top: 4px; padding: 4px 8px; background: #3D3520; border-radius: 6px; font-size: 12px; color: var(--amber); }
-#input-area { display: none; flex-shrink: 0; padding: 8px 16px calc(8px + var(--safe-b)); border-top: 1px solid #3A3A3C; background: var(--bg); }
-#input-area.visible { display: flex; gap: 8px; align-items: center; }
-#input-area input { flex: 1; height: 44px; border-radius: 10px; border: 1px solid #3A3A3C; background: #2C2C2E; color: #fff; padding: 0 12px; font-size: 16px; outline: none; }
-#input-area input:focus { border-color: var(--blue); }
-#input-area button { height: 44px; padding: 0 16px; border-radius: 10px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; }
+#input-area { display: none; flex-shrink: 0; border-top: 1px solid #3A3A3C; background: var(--bg); }
+#input-area.visible { display: block; }
+#img-preview { display: none; padding: 8px 16px 0; }
+#img-preview.visible { display: flex; align-items: center; gap: 8px; }
+#img-preview img { max-height: 80px; max-width: 120px; border-radius: 8px; object-fit: cover; border: 1px solid #3A3A3C; }
+#img-preview .img-name { flex: 1; font-size: 13px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#img-preview .img-remove { width: 28px; height: 28px; border-radius: 14px; border: none; background: #3A3A3C; color: var(--red); font-size: 16px; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+#input-row { display: flex; gap: 8px; align-items: center; padding: 8px 16px calc(8px + var(--safe-b)); }
+#input-row input[type="text"] { flex: 1; height: 44px; border-radius: 10px; border: 1px solid #3A3A3C; background: #2C2C2E; color: #fff; padding: 0 12px; font-size: 16px; outline: none; }
+#input-row input[type="text"]:focus { border-color: var(--blue); }
+#input-row button { height: 44px; padding: 0 16px; border-radius: 10px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; }
+.btn-attach { width: 44px; padding: 0; background: #3A3A3C; color: #fff; font-size: 20px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
 .btn-send { background: var(--blue); color: #fff; }
 .btn-cancel { background: #3A3A3C; color: var(--red); }
 #banner { display: none; padding: 10px 16px; background: #3D3520; border-bottom: 1px solid #5A4A20; font-size: 14px; color: var(--amber); }
@@ -100,9 +107,18 @@ header h1 { font-size: 20px; font-weight: 700; }
     </div>
   </div>
   <div id="input-area">
-    <input type="text" id="prompt-input" placeholder="Send a message..." enterkeyhint="send">
-    <button class="btn-send" id="btn-send">Send</button>
-    <button class="btn-cancel" id="btn-cancel">Cancel</button>
+    <div id="img-preview">
+      <img id="img-thumb" src="" alt="Preview">
+      <span class="img-name" id="img-name"></span>
+      <button class="img-remove" id="img-remove">&times;</button>
+    </div>
+    <div id="input-row">
+      <button class="btn-attach" id="btn-attach" title="Attach image">&#x1F4CE;</button>
+      <input type="text" id="prompt-input" placeholder="Send a message..." enterkeyhint="send">
+      <input type="file" id="file-input" accept="image/*" style="display:none">
+      <button class="btn-send" id="btn-send">Send</button>
+      <button class="btn-cancel" id="btn-cancel">Cancel</button>
+    </div>
   </div>
 </div>
 
@@ -619,17 +635,67 @@ header h1 { font-size: 20px; font-weight: 700; }
     });
   }
 
-  // Send prompt
+  // --- Image attachment ---
+  var pendingImage = null; // { name, dataUrl, base64, mimeType }
+  var $fileInput = document.getElementById('file-input');
+  var $imgPreview = document.getElementById('img-preview');
+  var $imgThumb = document.getElementById('img-thumb');
+  var $imgName = document.getElementById('img-name');
+
+  document.getElementById('btn-attach').addEventListener('click', function() {
+    $fileInput.click();
+  });
+
+  $fileInput.addEventListener('change', function() {
+    var file = $fileInput.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { $fileInput.value = ''; return; }
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      var dataUrl = e.target.result;
+      pendingImage = {
+        name: file.name,
+        dataUrl: dataUrl,
+        base64: dataUrl.split(',')[1],
+        mimeType: file.type,
+      };
+      $imgThumb.src = dataUrl;
+      $imgName.textContent = file.name;
+      $imgPreview.classList.add('visible');
+    };
+    reader.readAsDataURL(file);
+    $fileInput.value = '';
+  });
+
+  document.getElementById('img-remove').addEventListener('click', function() {
+    pendingImage = null;
+    $imgPreview.classList.remove('visible');
+    $imgThumb.src = '';
+  });
+
+  // Send prompt (with optional image)
   document.getElementById('btn-send').addEventListener('click', sendPrompt);
   $promptInput.addEventListener('keydown', function(e) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendPrompt(); }
   });
 
   function sendPrompt() {
-    const text = $promptInput.value.trim();
-    if (!text || !selectedId) return;
-    apiPost('/api/sessions/' + selectedId + '/prompt', { text: text });
+    var text = $promptInput.value.trim();
+    if (!text && !pendingImage) return;
+    if (!selectedId) return;
+    var body = { text: text || '' };
+    if (pendingImage) {
+      body.image = {
+        name: pendingImage.name,
+        base64: pendingImage.base64,
+        mimeType: pendingImage.mimeType,
+      };
+    }
+    apiPost('/api/sessions/' + selectedId + '/prompt', body);
     $promptInput.value = '';
+    pendingImage = null;
+    $imgPreview.classList.remove('visible');
+    $imgThumb.src = '';
   }
 
   // Cancel
