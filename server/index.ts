@@ -236,24 +236,31 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         const parsed = JSON.parse(body) as {
           text?: string;
           image?: { name: string; base64: string; mimeType: string };
+          images?: Array<{ name: string; base64: string; mimeType: string }>;
         };
         let promptText = parsed.text || '';
 
-        // Handle image upload
-        if (parsed.image && parsed.image.base64) {
-          const ext = parsed.image.mimeType === 'image/png' ? '.png'
-            : parsed.image.mimeType === 'image/gif' ? '.gif'
-            : parsed.image.mimeType === 'image/webp' ? '.webp'
+        // Collect images (single or multiple)
+        const imageList = parsed.images || (parsed.image ? [parsed.image] : []);
+
+        // Save each image and prepend references
+        const refs: string[] = [];
+        for (const img of imageList) {
+          if (!img.base64) continue;
+          const ext = img.mimeType === 'image/png' ? '.png'
+            : img.mimeType === 'image/gif' ? '.gif'
+            : img.mimeType === 'image/webp' ? '.webp'
             : '.jpg';
           const filename = `${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
           const filepath = join(UPLOADS_DIR, filename);
-          const buffer = Buffer.from(parsed.image.base64, 'base64');
+          const buffer = Buffer.from(img.base64, 'base64');
           writeFileSync(filepath, buffer);
           console.log(`[Upload] Saved ${filepath} (${buffer.length} bytes)`);
+          refs.push(`[User uploaded image: ${filepath}]`);
+        }
 
-          // Prepend image reference to prompt
-          const imageRef = `[User uploaded image: ${filepath}]\n`;
-          promptText = imageRef + promptText;
+        if (refs.length > 0) {
+          promptText = refs.join('\n') + '\n' + promptText;
         }
 
         if (!promptText.trim()) return error(res, 'Missing text or image');
