@@ -302,12 +302,13 @@ header h1 {
   padding: 8px 10px;
   background: #3A3A3C;
   border-radius: 8px;
-  white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.4;
-  max-height: 300px;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .card-waiting .card-context {
@@ -466,23 +467,20 @@ header h1 {
   line-height: 1;
 }
 
-#input-row {
-  display: flex;
-  gap: 6px;
-  align-items: flex-end;
-  padding: 6px 10px calc(6px + var(--safe-b));
+#input-text-row {
+  padding: 8px 10px 0;
 }
 
-#input-row textarea {
-  flex: 1;
-  min-width: 0;
-  min-height: 40px;
+#input-text-row textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 60px;
   max-height: 150px;
   border-radius: 10px;
   border: 1px solid #3A3A3C;
   background: #2C2C2E;
   color: #fff;
-  padding: 8px 10px;
+  padding: 10px 12px;
   font-size: 16px;
   font-family: inherit;
   outline: none;
@@ -491,13 +489,31 @@ header h1 {
   field-sizing: content;
 }
 
-#input-row textarea:focus {
+#input-text-row textarea:focus {
   border-color: var(--blue);
 }
 
-#input-row button {
-  height: 40px;
-  padding: 0 12px;
+#input-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px calc(6px + var(--safe-b));
+}
+
+.input-hint {
+  color: #636366;
+  font-size: 12px;
+  flex: 1;
+}
+
+.input-actions-right {
+  display: flex;
+  gap: 6px;
+}
+
+#input-actions button {
+  height: 36px;
+  padding: 0 14px;
   border-radius: 10px;
   border: none;
   font-size: 14px;
@@ -507,7 +523,8 @@ header h1 {
 }
 
 .btn-attach {
-  width: 40px;
+  width: 36px;
+  height: 36px;
   padding: 0;
   background: #3A3A3C;
   color: #fff;
@@ -523,9 +540,72 @@ header h1 {
   color: #fff;
 }
 
+.btn-queue {
+  background: var(--amber);
+  color: #1C1C1E;
+}
+
 .btn-cancel {
   background: #3A3A3C;
   color: var(--red);
+}
+
+/* --- Queue Banner --- */
+
+.queue-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #3D3520;
+  border-bottom: 1px solid #5A4A20;
+  font-size: 13px;
+  color: var(--amber);
+}
+
+.queue-banner-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-badge-images {
+  color: var(--text2);
+  font-size: 12px;
+}
+
+.queue-banner-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.queue-banner-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: none;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #5A4A20;
+  color: var(--amber);
+}
+
+/* --- Queued Badge on Session Card --- */
+
+.card-queued-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 214, 10, 0.15);
+  color: var(--amber);
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 /* --- Modal --- */

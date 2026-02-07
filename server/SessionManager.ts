@@ -262,12 +262,14 @@ export class SessionManager {
       case 'user_prompt_submit':
         session.status = 'working';
         session.currentTool = undefined;
+        session.currentToolInput = undefined;
         session.lastAssistantText = undefined;
         session.permissionRequest = undefined;
         break;
       case 'pre_tool_use':
         session.status = 'working';
         session.currentTool = event.tool;
+        session.currentToolInput = event.toolInput;
         session.permissionRequest = undefined;
         // Save assistant text from pre_tool_use (what Claude said before calling the tool)
         if (event.assistantText) {
@@ -276,40 +278,48 @@ export class SessionManager {
         break;
       case 'post_tool_use':
         session.status = 'working';
+        session.currentToolInput = undefined;
         session.permissionRequest = undefined;
         break;
       case 'stop':
         session.status = 'idle';
         session.currentTool = undefined;
+        session.currentToolInput = undefined;
         session.permissionRequest = undefined;
         if (event.assistantText) {
           session.lastAssistantText = event.assistantText;
         }
         break;
-      case 'notification':
+      case 'notification': {
         session.status = 'waiting';
-        // Store structured permission request data for rich UI rendering
-        if (event.tool && event.toolInput) {
-          session.permissionRequest = { tool: event.tool, toolInput: event.toolInput };
+        // Store structured permission request data for rich UI rendering.
+        // Claude Code's Notification hook does NOT include tool_name/tool_input,
+        // so fall back to the tool info from the preceding pre_tool_use event.
+        const permTool = event.tool || session.currentTool;
+        const permInput = event.toolInput || session.currentToolInput;
+        if (permTool && permInput) {
+          session.permissionRequest = { tool: permTool, toolInput: permInput };
         } else {
           session.permissionRequest = undefined;
         }
-        // For notification events, build context from tool info if no assistantText.
-        // This covers tool permission prompts (Bash, Edit, etc.) and AskUserQuestion.
+        // Build context from tool info if no assistantText
         if (event.assistantText) {
           session.lastAssistantText = event.assistantText;
-        } else if (event.tool && event.toolInput) {
-          session.lastAssistantText = SessionManager.buildNotificationContext(event.tool, event.toolInput);
+        } else if (permTool && permInput) {
+          session.lastAssistantText = SessionManager.buildNotificationContext(permTool, permInput);
         }
         break;
+      }
       case 'session_start':
         session.status = 'idle';
         session.claudeSessionId = event.sessionId;
+        session.currentToolInput = undefined;
         session.permissionRequest = undefined;
         break;
       case 'session_end':
         session.status = 'idle';
         session.currentTool = undefined;
+        session.currentToolInput = undefined;
         session.permissionRequest = undefined;
         break;
     }
@@ -420,6 +430,7 @@ export class SessionManager {
         if (session.status !== 'offline') {
           session.status = 'offline';
           session.currentTool = undefined;
+          session.currentToolInput = undefined;
           this.onSessionUpdate(session);
           changed = true;
         }
@@ -437,6 +448,7 @@ export class SessionManager {
       ) {
         session.status = 'idle';
         session.currentTool = undefined;
+        session.currentToolInput = undefined;
         this.onSessionUpdate(session);
         changed = true;
       }

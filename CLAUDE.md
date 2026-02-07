@@ -38,6 +38,7 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 6. Dashboard shows session cards, event feeds, and prompt input
 7. Prompts sent via dashboard are delivered to the correct tmux pane
 8. Permission prompts can be approved/rejected from the dashboard via tmux keys
+9. Prompts sent while a session is busy are queued and auto-sent when it becomes idle
 
 ## Architecture Decisions
 - Sessions are auto-discovered from hook events, not from tmux session listing
@@ -47,6 +48,9 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - Web Notifications API + Web Audio API for alerts (no service worker yet)
 - Frontend is now a React/Vite app in `frontend/` (replaces old single-file HTML)
 - `public/index.html` is a built artifact from the React frontend
+- Prompt queue: when a session is working, new prompts are queued client-side and auto-sent on idle
+- Create session modal has checkbox toggles for common flags (--dangerously-skip-permissions, --chrome)
+- Permission request data falls back to preceding pre_tool_use event when notification lacks tool info
 
 ## Parallel Agent Notes
 - When multiple agents edit this codebase, re-read files before editing (another agent may have changed them)

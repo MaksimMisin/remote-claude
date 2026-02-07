@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
-import type { ManagedSession, ClaudeEvent, RcMarker } from './types';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import type { ManagedSession, ClaudeEvent, RcMarker, QueuedPrompt } from './types';
 import type { PermissionAction } from './components/PermissionPrompt';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useNotifications } from './hooks/useNotifications';
@@ -32,6 +32,9 @@ export default function App() {
     visible: false,
   });
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [queuedPrompts, setQueuedPrompts] = useState<Record<string, QueuedPrompt>>({});
+  const queuedPromptsRef = useRef(queuedPrompts);
+  queuedPromptsRef.current = queuedPrompts;
 
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
@@ -130,11 +133,24 @@ export default function App() {
             true,
           );
         } else if (prevStatus === 'working' && session.status === 'idle') {
-          notificationsRef.current.notify(
-            session.name + ' finished',
-            contextSnippet || session.lastMarker?.message || 'Task complete',
-            false,
-          );
+          // Auto-send queued prompt after a short delay
+          const queued = queuedPromptsRef.current[session.id];
+          if (queued) {
+            setQueuedPrompts((prev) => {
+              const next = { ...prev };
+              delete next[session.id];
+              return next;
+            });
+            setTimeout(() => {
+              doSend(session.id, queued.text, queued.images);
+            }, 300);
+          } else {
+            notificationsRef.current.notify(
+              session.name + ' finished',
+              contextSnippet || session.lastMarker?.message || 'Task complete',
+              false,
+            );
+          }
         } else if (
           session.status === 'waiting' &&
           prevStatus !== 'waiting'
@@ -144,6 +160,16 @@ export default function App() {
             contextSnippet || session.lastMarker?.message || 'Waiting for your response',
             true,
           );
+        }
+
+        // Clear queue when session goes offline
+        if (session.status === 'offline') {
+          setQueuedPrompts((prev) => {
+            if (!prev[session.id]) return prev;
+            const next = { ...prev };
+            delete next[session.id];
+            return next;
+          });
         }
 
         return { ...prev, [session.id]: session };
@@ -166,6 +192,12 @@ export default function App() {
         return next;
       });
       setSelectedId((prev) => (prev === sessionId ? null : prev));
+      setQueuedPrompts((prev) => {
+        if (!prev[sessionId]) return prev;
+        const next = { ...prev };
+        delete next[sessionId];
+        return next;
+      });
     },
     onVersion: (v: string) => {
       setVersion(v);
@@ -192,22 +224,40 @@ export default function App() {
     [send],
   );
 
-  // Send prompt
-  const handleSend = useCallback(
+  // Send prompt (or queue if session is busy)
+  const doSend = useCallback(
     (
+      sid: string,
       text: string,
       images: { name: string; base64: string; mimeType: string }[],
     ) => {
-      if (!selectedIdRef.current) return;
       const body: Record<string, unknown> = { text: text || '' };
       if (images.length === 1) {
         body.image = images[0];
       } else if (images.length > 1) {
         body.images = images;
       }
-      apiPost('/api/sessions/' + selectedIdRef.current + '/prompt', body);
+      apiPost('/api/sessions/' + sid + '/prompt', body);
     },
     [],
+  );
+
+  const handleSend = useCallback(
+    (
+      text: string,
+      images: { name: string; base64: string; mimeType: string }[],
+    ) => {
+      const sid = selectedIdRef.current;
+      if (!sid) return;
+      const session = sessionsRef.current[sid];
+      if (session && session.status === 'working') {
+        // Queue instead of sending immediately
+        setQueuedPrompts((prev) => ({ ...prev, [sid]: { text, images } }));
+      } else {
+        doSend(sid, text, images);
+      }
+    },
+    [doSend],
   );
 
   // Cancel
@@ -220,6 +270,29 @@ export default function App() {
       return next;
     });
     apiPost('/api/sessions/' + sid + '/cancel', {});
+  }, []);
+
+  // Cancel queued prompt
+  const handleCancelQueue = useCallback((sid: string) => {
+    setQueuedPrompts((prev) => {
+      if (!prev[sid]) return prev;
+      const next = { ...prev };
+      delete next[sid];
+      return next;
+    });
+  }, []);
+
+  // Edit queued prompt — returns the queued prompt so InputArea can restore it
+  const handleEditQueue = useCallback((sid: string): QueuedPrompt | undefined => {
+    const queued = queuedPromptsRef.current[sid];
+    if (queued) {
+      setQueuedPrompts((prev) => {
+        const next = { ...prev };
+        delete next[sid];
+        return next;
+      });
+    }
+    return queued;
   }, []);
 
   // Permission action (Yes/Allow All/No)
@@ -243,6 +316,12 @@ export default function App() {
       return next;
     });
     setSelectedId((prev) => (prev === id ? null : prev));
+    setQueuedPrompts((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     apiPost('/api/sessions/' + id + '/dismiss', {});
   }, []);
 
@@ -254,6 +333,12 @@ export default function App() {
       return next;
     });
     setSelectedId((prev) => (prev === id ? null : prev));
+    setQueuedPrompts((prev) => {
+      if (!prev[id]) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
     apiPost('/api/sessions/' + id + '/close', {});
   }, []);
 
@@ -284,6 +369,8 @@ export default function App() {
   }, []);
 
   const selectedEvents = selectedId ? events[selectedId] || [] : [];
+  const queuedSessionIds = useMemo(() => new Set(Object.keys(queuedPrompts)), [queuedPrompts]);
+  const selectedSession = selectedId ? sessions[selectedId] : undefined;
 
   return (
     <div id="app">
@@ -303,6 +390,7 @@ export default function App() {
           sessions={sessions}
           selectedId={selectedId}
           cancellingIds={cancellingIds}
+          queuedSessionIds={queuedSessionIds}
           onSelect={handleSelect}
           onDismiss={handleDismiss}
           onClose={handleClose}
@@ -314,8 +402,12 @@ export default function App() {
       {selectedId && (
         <InputArea
           selectedId={selectedId}
+          sessionStatus={selectedSession?.status}
+          queuedPrompt={queuedPrompts[selectedId] || null}
           onSend={handleSend}
           onCancel={handleCancel}
+          onCancelQueue={() => handleCancelQueue(selectedId)}
+          onEditQueue={() => handleEditQueue(selectedId)}
         />
       )}
 

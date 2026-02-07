@@ -8,6 +8,7 @@ interface SessionCardProps {
   session: ManagedSession;
   selected: boolean;
   cancelling: boolean;
+  hasQueuedPrompt?: boolean;
   onClick: () => void;
   onDismiss: () => void;
   onClose: () => void;
@@ -44,6 +45,7 @@ export const SessionCard = memo(function SessionCard({
   session,
   selected,
   cancelling,
+  hasQueuedPrompt,
   onClick,
   onDismiss,
   onClose,
@@ -107,6 +109,9 @@ export const SessionCard = memo(function SessionCard({
         )}
         {tokens != null && tokens > 0 && (
           <span className="ctx-item ctx-tokens">{formatTokens(tokens)} tok</span>
+        )}
+        {hasQueuedPrompt && session.status === 'working' && (
+          <span className="card-queued-badge">Queued</span>
         )}
       </div>
 
