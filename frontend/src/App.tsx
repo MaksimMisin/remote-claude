@@ -103,6 +103,9 @@ export default function App() {
     [],
   );
 
+  // Ref for doSend — declared early so onSessionUpdate can reference it
+  const doSendRef = useRef((_sid: string, _text: string, _images: { name: string; base64: string; mimeType: string }[]) => {});
+
   const wsCallbacks = useRef({
     onSessions: (list: ManagedSession[]) => {
       const map: Record<string, ManagedSession> = {};
@@ -142,7 +145,7 @@ export default function App() {
               return next;
             });
             setTimeout(() => {
-              doSend(session.id, queued.text, queued.images);
+              doSendRef.current(session.id, queued.text, queued.images);
             }, 300);
           } else {
             notificationsRef.current.notify(
@@ -224,7 +227,7 @@ export default function App() {
     [send],
   );
 
-  // Send prompt (or queue if session is busy)
+  // Send prompt helper — also stored in a ref for use in callbacks
   const doSend = useCallback(
     (
       sid: string,
@@ -241,6 +244,7 @@ export default function App() {
     },
     [],
   );
+  doSendRef.current = doSend;
 
   const handleSend = useCallback(
     (
