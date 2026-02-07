@@ -2,6 +2,7 @@ import { memo } from 'react';
 import type { ManagedSession } from '../types';
 import { relativeTime, formatTokens } from '../utils/time';
 import { actionSummary, stripMarkers } from '../utils/events';
+import { PermissionPrompt, permissionSummary, type PermissionAction } from './PermissionPrompt';
 
 interface SessionCardProps {
   session: ManagedSession;
@@ -10,6 +11,7 @@ interface SessionCardProps {
   onClick: () => void;
   onDismiss: () => void;
   onClose: () => void;
+  onPermissionAction?: (action: PermissionAction) => void;
 }
 
 /** Strip leading emoji prefix (e.g. "fix auth" -> "fix auth") set by tmux-title hook */
@@ -45,6 +47,7 @@ export const SessionCard = memo(function SessionCard({
   onClick,
   onDismiss,
   onClose,
+  onPermissionAction,
 }: SessionCardProps) {
   const isWaiting = session.status === 'waiting';
   const showContext = needsContext(session);
@@ -57,8 +60,10 @@ export const SessionCard = memo(function SessionCard({
     ? stripEmojiPrefix(session.windowName)
     : session.name || session.id;
 
+  const hasPerm = isWaiting && !!session.permissionRequest;
+
   // Clean assistant text for display (strip rc markers)
-  const contextText = showContext && session.lastAssistantText
+  const contextText = showContext && !hasPerm && session.lastAssistantText
     ? stripMarkers(session.lastAssistantText)
     : '';
 
