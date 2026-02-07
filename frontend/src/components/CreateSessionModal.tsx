@@ -25,6 +25,7 @@ export function CreateSessionModal({
   const [cwd, setCwd] = useState('');
   const [flags, setFlags] = useState('');
   const [skipPermissions, setSkipPermissions] = useState(false);
+  const [useChrome, setUseChrome] = useState(false);
   const [duplicateFrom, setDuplicateFrom] = useState('');
   const [dirSuggestions, setDirSuggestions] = useState<string[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -52,6 +53,7 @@ export function CreateSessionModal({
       setCwd('');
       setFlags('');
       setSkipPermissions(false);
+      setUseChrome(false);
       setDuplicateFrom('');
       setDirSuggestions([]);
       setShowSuggestions(false);
@@ -144,9 +146,14 @@ export function CreateSessionModal({
         finalFlags = finalFlags ? finalFlags + ' ' + skipFlag : skipFlag;
       }
     }
+    if (useChrome) {
+      if (!finalFlags.includes('--chrome')) {
+        finalFlags = finalFlags ? finalFlags + ' --chrome' : '--chrome';
+      }
+    }
     onCreate(finalName, finalCwd || '', finalFlags || undefined);
     onClose();
-  }, [name, cwd, flags, skipPermissions, onCreate, onClose]);
+  }, [name, cwd, flags, skipPermissions, useChrome, onCreate, onClose]);
 
   const handleOverlayClick = useCallback(
     (e: React.MouseEvent) => {
@@ -271,6 +278,14 @@ export function CreateSessionModal({
             onChange={(e) => setSkipPermissions(e.target.checked)}
           />
           <span>--dangerously-skip-permissions</span>
+        </label>
+        <label className="modal-checkbox">
+          <input
+            type="checkbox"
+            checked={useChrome}
+            onChange={(e) => setUseChrome(e.target.checked)}
+          />
+          <span>--chrome</span>
         </label>
 
         <div className="modal-btns">

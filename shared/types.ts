@@ -17,6 +17,7 @@ export interface ManagedSession {
   lastActivity: number;
   cwd: string;
   currentTool?: string;
+  currentToolInput?: Record<string, unknown>;
   claudeSessionId?: string;
   lastMarker?: RcMarker;
   lastAssistantText?: string;
