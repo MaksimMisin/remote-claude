@@ -50,6 +50,18 @@ export async function listManagedSessions(): Promise<string[]> {
   return all.filter(name => name.startsWith(TMUX_SESSION_PREFIX));
 }
 
+/** List all tmux panes as "session:window.pane" targets. */
+export async function listPanes(): Promise<string[]> {
+  try {
+    const stdout = await execFileAsync('tmux', [
+      'list-panes', '-a', '-F', '#{session_name}:#{window_index}.#{pane_index}',
+    ]);
+    return stdout.trim().split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
 /** Validate and parse a flags string into an array of safe CLI flags. */
 function parseFlags(flags: string): string[] {
   const parts = flags.split(/\s+/).filter(Boolean);
@@ -110,6 +122,24 @@ export async function getWindowName(target: string): Promise<string> {
 export async function killWindow(target: string): Promise<void> {
   validateTarget(target);
   await execFileAsync('tmux', ['kill-window', '-t', target]);
+}
+
+/** Allowed tmux key names for sendKeys (prevents injection). */
+const ALLOWED_KEYS = new Set([
+  'Enter', 'Escape', 'Tab', 'BTab', 'Space', 'BSpace',
+  'Up', 'Down', 'Left', 'Right',
+  'C-c', 'C-d', 'C-z',
+]);
+
+export async function sendKeys(target: string, ...keys: string[]): Promise<void> {
+  validateTarget(target);
+  for (const key of keys) {
+    if (!ALLOWED_KEYS.has(key)) {
+      throw new Error(`Disallowed tmux key: ${key}`);
+    }
+    await execFileAsync('tmux', ['send-keys', '-t', target, key]);
+    await sleep(50);
+  }
 }
 
 export async function killSession(tmuxSession: string): Promise<void> {

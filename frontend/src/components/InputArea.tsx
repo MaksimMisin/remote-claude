@@ -19,12 +19,15 @@ export function InputArea({
   const [text, setText] = useState('');
   const [images, setImages] = useState<PendingImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
   const inputAreaRef = useRef<HTMLDivElement>(null);
 
-  // Reset state when session changes
+  // Reset state and focus input when session changes
   useEffect(() => {
     setText('');
     setImages([]);
+    // Small delay to ensure DOM is ready after session switch
+    setTimeout(() => textInputRef.current?.focus(), 100);
   }, [selectedId]);
 
   // VisualViewport: keep input above mobile keyboard
@@ -126,6 +129,7 @@ export function InputArea({
         </button>
         <input
           type="text"
+          ref={textInputRef}
           placeholder="Send a message..."
           enterKeyHint="send"
           value={text}

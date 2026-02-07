@@ -16,6 +16,7 @@ export interface ManagedSession {
   claudeSessionId?: string;
   lastMarker?: RcMarker;
   lastAssistantText?: string;
+  permissionRequest?: { tool: string; toolInput: Record<string, unknown> };
   windowName?: string;
   gitBranch?: string;
   gitDirty?: boolean;

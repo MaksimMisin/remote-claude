@@ -17,9 +17,14 @@ export class SessionManager {
   private sessions = new Map<string, ManagedSession>();
   private healthInterval: ReturnType<typeof setInterval> | null = null;
   private onSessionUpdate: (session: ManagedSession) => void;
+  private onSessionRemoved: (sessionId: string) => void;
 
-  constructor(onSessionUpdate: (session: ManagedSession) => void) {
+  constructor(
+    onSessionUpdate: (session: ManagedSession) => void,
+    onSessionRemoved?: (sessionId: string) => void,
+  ) {
     this.onSessionUpdate = onSessionUpdate;
+    this.onSessionRemoved = onSessionRemoved || (() => {});
     this.load();
   }
 
@@ -176,6 +181,14 @@ export class SessionManager {
     await tmux.sendPrompt(this.resolveTarget(session), text);
   }
 
+  /** Send raw tmux keys to a session's pane. */
+  async sendKeys(id: string, keys: string[]): Promise<void> {
+    const session = this.sessions.get(id);
+    if (!session) throw new Error('Session not found');
+    if (session.status === 'offline') throw new Error('Session is offline');
+    await tmux.sendKeys(this.resolveTarget(session), ...keys);
+  }
+
   /** Send Ctrl+C to a session. */
   async sendCancel(id: string): Promise<void> {
     const session = this.sessions.get(id);
@@ -195,9 +208,21 @@ export class SessionManager {
 
     // Auto-discover: create a session for unknown Claude Code instances
     if (!session && event.sessionId && event.sessionId !== 'unknown') {
+      // Deduplicate by tmuxTarget: if another session already points to the
+      // same pane, replace it (new Claude process reused the pane)
+      if (event.tmuxTarget) {
+        for (const [existingId, existing] of this.sessions.entries()) {
+          if (existing.tmuxTarget === event.tmuxTarget && existing.claudeSessionId !== event.sessionId) {
+            console.log(`[SessionManager] Replacing stale session ${existingId} on pane ${event.tmuxTarget}`);
+            this.sessions.delete(existingId);
+            this.onSessionRemoved(existingId);
+            break;
+          }
+        }
+      }
+
       const id = event.sessionId.slice(0, 8);
       const cwdName = event.cwd.split('/').pop() || 'unknown';
-      // Include tmux pane in name so multiple sessions in the same project are distinguishable
       const paneLabel = event.tmuxTarget || '';
       const name = paneLabel ? `${cwdName} (${paneLabel})` : cwdName;
       session = {
@@ -233,10 +258,12 @@ export class SessionManager {
         session.status = 'working';
         session.currentTool = undefined;
         session.lastAssistantText = undefined;
+        session.permissionRequest = undefined;
         break;
       case 'pre_tool_use':
         session.status = 'working';
         session.currentTool = event.tool;
+        session.permissionRequest = undefined;
         // Save assistant text from pre_tool_use (what Claude said before calling the tool)
         if (event.assistantText) {
           session.lastAssistantText = event.assistantText;
@@ -244,16 +271,24 @@ export class SessionManager {
         break;
       case 'post_tool_use':
         session.status = 'working';
+        session.permissionRequest = undefined;
         break;
       case 'stop':
         session.status = 'idle';
         session.currentTool = undefined;
+        session.permissionRequest = undefined;
         if (event.assistantText) {
           session.lastAssistantText = event.assistantText;
         }
         break;
       case 'notification':
         session.status = 'waiting';
+        // Store structured permission request data for rich UI rendering
+        if (event.tool && event.toolInput) {
+          session.permissionRequest = { tool: event.tool, toolInput: event.toolInput };
+        } else {
+          session.permissionRequest = undefined;
+        }
         // For notification events, build context from tool info if no assistantText.
         // This covers tool permission prompts (Bash, Edit, etc.) and AskUserQuestion.
         if (event.assistantText) {
@@ -265,10 +300,12 @@ export class SessionManager {
       case 'session_start':
         session.status = 'idle';
         session.claudeSessionId = event.sessionId;
+        session.permissionRequest = undefined;
         break;
       case 'session_end':
         session.status = 'idle';
         session.currentTool = undefined;
+        session.permissionRequest = undefined;
         break;
     }
 
@@ -277,17 +314,26 @@ export class SessionManager {
     }
 
     // Update git info from events
-    if (event.gitBranch) {
+    let metaChanged = false;
+    if (event.gitBranch && (event.gitBranch !== session.gitBranch || event.gitDirty !== session.gitDirty)) {
       session.gitBranch = event.gitBranch;
       session.gitDirty = event.gitDirty;
+      metaChanged = true;
     }
 
     // Update token count (sent on stop events)
-    if (event.totalTokens != null) {
+    if (event.totalTokens != null && event.totalTokens !== session.totalTokens) {
       session.totalTokens = event.totalTokens;
+      metaChanged = true;
     }
 
-    const changed = session.status !== prevStatus || event.marker || event.assistantText;
+    // Update cwd if it changed
+    if (event.cwd && event.cwd !== session.cwd) {
+      session.cwd = event.cwd;
+      metaChanged = true;
+    }
+
+    const changed = session.status !== prevStatus || event.marker || event.assistantText || metaChanged;
     if (changed) {
       this.save();
       this.onSessionUpdate(session);
@@ -309,17 +355,30 @@ export class SessionManager {
   }
 
   private async healthCheck(): Promise<void> {
+    // Get both session names and specific pane targets
     const liveSessions = await tmux.listSessions();
-    const liveSet = new Set(liveSessions);
+    const livePanes = await tmux.listPanes();
+    const liveSessionSet = new Set(liveSessions);
+    const livePaneSet = new Set(livePanes);
     let changed = false;
 
+    const toRemove: string[] = [];
+
     for (const session of this.sessions.values()) {
-      // Auto-discovered sessions: check by tmuxTarget (e.g. "Personal:6.0")
-      const isAutoDiscovered = !session.tmuxSession;
-      const tmuxSessionName = session.tmuxTarget?.split(':')[0] || session.tmuxSession;
-      const isAlive = isAutoDiscovered
-        ? (tmuxSessionName && liveSet.has(tmuxSessionName)) || Date.now() - session.lastActivity < WORKING_TIMEOUT_MS
-        : liveSet.has(session.tmuxSession);
+      const isServerCreated = !!session.tmuxSession;
+      let isAlive: boolean;
+
+      if (session.tmuxTarget) {
+        // Best check: verify the specific pane exists
+        isAlive = livePaneSet.has(session.tmuxTarget);
+      } else if (isServerCreated) {
+        // Server-created sessions: check by managed tmux session name
+        isAlive = liveSessionSet.has(session.tmuxSession);
+      } else {
+        // Auto-discovered without tmuxTarget (shouldn't happen normally):
+        // give it a short grace period for initial events
+        isAlive = Date.now() - session.lastActivity < 30_000;
+      }
 
       // Read tmux window name for alive sessions with a target
       if (isAlive && session.tmuxTarget) {
@@ -339,7 +398,12 @@ export class SessionManager {
           changed = true;
         }
       } else {
-        if (session.status !== 'offline') {
+        // Pane is gone — remove auto-discovered sessions immediately,
+        // mark server-created ones offline
+        if (!isServerCreated) {
+          toRemove.push(session.id);
+          changed = true;
+        } else if (session.status !== 'offline') {
           session.status = 'offline';
           session.currentTool = undefined;
           this.onSessionUpdate(session);
@@ -357,6 +421,13 @@ export class SessionManager {
         this.onSessionUpdate(session);
         changed = true;
       }
+    }
+
+    // Remove dead auto-discovered sessions and broadcast removal
+    for (const id of toRemove) {
+      console.log(`[SessionManager] Removing dead session: ${id}`);
+      this.sessions.delete(id);
+      this.onSessionRemoved(id);
     }
 
     if (changed) this.save();

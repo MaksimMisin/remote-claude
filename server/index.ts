@@ -54,9 +54,14 @@ const eventProcessor = new EventProcessor((event: ClaudeEvent) => {
   sessionManager.handleEvent(event);
 });
 
-const sessionManager = new SessionManager((session) => {
-  broadcast({ type: 'session_update', payload: session });
-});
+const sessionManager = new SessionManager(
+  (session) => {
+    broadcast({ type: 'session_update', payload: session });
+  },
+  (sessionId) => {
+    broadcast({ type: 'session_removed', payload: { sessionId } });
+  },
+);
 
 // --- HTTP helpers ---
 
@@ -300,6 +305,16 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
         if (!promptText.trim()) return error(res, 'Missing text or image');
         await sessionManager.sendPrompt(route.id, promptText);
+        return json(res, { ok: true });
+      }
+
+      if (route.action === 'keys' && method === 'POST') {
+        const body = await readBody(req);
+        const { keys } = JSON.parse(body) as { keys: string[] };
+        if (!Array.isArray(keys) || keys.length === 0 || keys.length > 10) {
+          return error(res, 'keys must be an array of 1-10 strings');
+        }
+        await sessionManager.sendKeys(route.id, keys);
         return json(res, { ok: true });
       }
 

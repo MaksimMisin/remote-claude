@@ -243,14 +243,23 @@ export default function App() {
     apiPost('/api/sessions/' + id + '/close', {});
   }, []);
 
-  // Create session
+  // Create session and navigate to it
   const handleCreate = useCallback(
-    (name: string, cwd: string, flags?: string) => {
+    async (name: string, cwd: string, flags?: string) => {
       const body: Record<string, unknown> = { name, cwd: cwd || undefined };
       if (flags) body.flags = flags;
-      apiPost('/api/sessions', body);
+      try {
+        const res = await apiPost('/api/sessions', body);
+        if (res.ok) {
+          const session: ManagedSession = await res.json();
+          setSessions((prev) => ({ ...prev, [session.id]: session }));
+          handleSelect(session.id);
+        }
+      } catch {
+        // Will appear via WebSocket update anyway
+      }
     },
-    [],
+    [handleSelect],
   );
 
   // Live relative time updates
