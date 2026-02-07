@@ -111,12 +111,21 @@ export const SessionCard = memo(function SessionCard({
       </div>
 
       <div className="card-summary">
-        {actionSummary(session, cancelling)}
+        {hasPerm && !selected
+          ? permissionSummary(session.permissionRequest!.tool, session.permissionRequest!.toolInput)
+          : actionSummary(session, cancelling)}
       </div>
+      {selected && hasPerm && onPermissionAction && (
+        <PermissionPrompt
+          tool={session.permissionRequest!.tool}
+          toolInput={session.permissionRequest!.toolInput}
+          onAction={onPermissionAction}
+        />
+      )}
       {showContext && contextText && (
         <div className="card-context">{contextText}</div>
       )}
-      {isWaiting && session.lastMarker && !contextText && (
+      {isWaiting && !hasPerm && session.lastMarker && !contextText && (
         <div className="card-marker">{session.lastMarker.message}</div>
       )}
     </div>
