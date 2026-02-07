@@ -9,6 +9,7 @@ import {
   SESSIONS_FILE,
   HEALTH_CHECK_INTERVAL_MS,
   WORKING_TIMEOUT_MS,
+  SESSION_OFFLINE_GRACE_MS,
 } from '../shared/defaults.js';
 import type { ManagedSession, ClaudeEvent, SessionStatus } from '../shared/types.js';
 import * as tmux from './TmuxController.js';
@@ -362,6 +363,19 @@ export class SessionManager {
     // Get both session names and specific pane targets
     const liveSessions = await tmux.listSessions();
     const livePanes = await tmux.listPanes();
+
+    // If tmux returned nothing but we have recently-active sessions,
+    // assume a transient tmux failure and skip this check cycle
+    if (liveSessions.length === 0 && livePanes.length === 0 && this.sessions.size > 0) {
+      const recentlyActive = Array.from(this.sessions.values()).some(
+        s => Date.now() - s.lastActivity < 60_000,
+      );
+      if (recentlyActive) {
+        console.warn('[SessionManager] tmux returned no sessions/panes but sessions are active — skipping health check');
+        return;
+      }
+    }
+
     const liveSessionSet = new Set(liveSessions);
     const livePaneSet = new Set(livePanes);
     let changed = false;
@@ -402,15 +416,16 @@ export class SessionManager {
           changed = true;
         }
       } else {
-        // Pane is gone — remove auto-discovered sessions immediately,
-        // mark server-created ones offline
-        if (!isServerCreated) {
-          toRemove.push(session.id);
-          changed = true;
-        } else if (session.status !== 'offline') {
+        // Pane is gone — mark offline first, remove after grace period
+        if (session.status !== 'offline') {
           session.status = 'offline';
           session.currentTool = undefined;
           this.onSessionUpdate(session);
+          changed = true;
+        }
+        // Remove auto-discovered sessions after grace period with no activity
+        if (!isServerCreated && Date.now() - session.lastActivity > SESSION_OFFLINE_GRACE_MS) {
+          toRemove.push(session.id);
           changed = true;
         }
       }
