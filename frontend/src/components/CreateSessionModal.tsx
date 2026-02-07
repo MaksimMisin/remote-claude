@@ -5,7 +5,7 @@ import type { ManagedSession } from '../types';
 interface CreateSessionModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, cwd: string, flags?: string) => void;
+  onCreate: (name: string, cwd: string, flags?: string) => void | Promise<void>;
   sessions: Record<string, ManagedSession>;
 }
 

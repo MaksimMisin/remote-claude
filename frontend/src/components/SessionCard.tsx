@@ -12,7 +12,7 @@ interface SessionCardProps {
   onClose: () => void;
 }
 
-/** Strip leading emoji prefix (e.g. "fix auth" → "fix auth") set by tmux-title hook */
+/** Strip leading emoji prefix (e.g. "fix auth" -> "fix auth") set by tmux-title hook */
 function stripEmojiPrefix(name: string): string {
   return name.replace(/^[\p{Emoji}\p{Emoji_Presentation}\uFE0F]+\s*/u, '');
 }
@@ -24,6 +24,18 @@ function needsContext(session: ManagedSession): boolean {
     return session.lastMarker.category === 'question' || session.lastMarker.category === 'error';
   }
   return false;
+}
+
+/** Shorten a path like /Users/user/code/remote-claude -> ~/code/remote-claude */
+function shortenPath(cwd: string): string {
+  const home = '/Users/';
+  if (cwd.startsWith(home)) {
+    const afterHome = cwd.slice(home.length);
+    const slashIdx = afterHome.indexOf('/');
+    if (slashIdx !== -1) return '~' + afterHome.slice(slashIdx);
+    return '~';
+  }
+  return cwd;
 }
 
 export const SessionCard = memo(function SessionCard({
@@ -50,43 +62,49 @@ export const SessionCard = memo(function SessionCard({
     ? stripMarkers(session.lastAssistantText)
     : '';
 
-  // Build git + token context pieces
-  const gitInfo = session.gitBranch
-    ? `${session.gitBranch}${session.gitDirty ? '*' : ''}`
-    : '';
-  const tokenInfo = session.totalTokens != null
-    ? `${formatTokens(session.totalTokens)} tokens`
-    : '';
+  // Context info
+  const folder = session.cwd ? shortenPath(session.cwd) : '';
+  const gitBranch = session.gitBranch || '';
+  const gitDirty = session.gitDirty || false;
+  const tokens = session.totalTokens;
 
   return (
     <div className={className} onClick={onClick}>
       <div className="card-header">
         <div className={`dot dot-${session.status}`} />
         <div className="card-name">{displayName}</div>
-        {selected && (
-          <div className="card-header-actions">
-            <button
-              className="card-header-btn card-btn-hide"
-              onClick={(e) => { e.stopPropagation(); onDismiss(); }}
-            >
-              Hide
-            </button>
-            <button
-              className="card-header-btn card-btn-close"
-              onClick={(e) => { e.stopPropagation(); onClose(); }}
-            >
-              Close
-            </button>
-          </div>
-        )}
+        <div className={`card-header-actions${selected ? ' always-visible' : ''}`}>
+          <button
+            className="card-header-btn card-btn-hide"
+            onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+          >
+            Hide
+          </button>
+          <button
+            className="card-header-btn card-btn-close"
+            onClick={(e) => { e.stopPropagation(); onClose(); }}
+          >
+            Close
+          </button>
+        </div>
         <div className="card-time">{relativeTime(session.lastActivity)}</div>
       </div>
-      {(gitInfo || tokenInfo) && (
-        <div className="card-meta">
-          {gitInfo && <span className="card-git">{gitInfo}</span>}
-          {tokenInfo && <span className="card-tokens">{tokenInfo}</span>}
-        </div>
-      )}
+
+      {/* Context bar: folder, git branch, tokens */}
+      <div className="card-ctx">
+        {folder && (
+          <span className="ctx-item ctx-folder" title={session.cwd}>{folder}</span>
+        )}
+        {gitBranch && (
+          <span className="ctx-item ctx-git">
+            {gitBranch}{gitDirty && <span className="ctx-dirty">*</span>}
+          </span>
+        )}
+        {tokens != null && tokens > 0 && (
+          <span className="ctx-item ctx-tokens">{formatTokens(tokens)} tok</span>
+        )}
+      </div>
+
       <div className="card-summary">
         {actionSummary(session, cancelling)}
       </div>

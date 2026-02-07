@@ -178,9 +178,19 @@ header h1 {
 }
 
 .card-header-actions {
-  display: flex;
+  display: none;
   gap: 6px;
   flex-shrink: 0;
+}
+
+/* Show on hover (desktop) */
+.card:hover .card-header-actions {
+  display: flex;
+}
+
+/* Always show when selected (mobile tap) */
+.card-header-actions.always-visible {
+  display: flex;
 }
 
 .card-header-btn {
@@ -227,23 +237,53 @@ header h1 {
   white-space: nowrap;
 }
 
-.card-meta {
+/* --- Context Bar (folder / git / tokens) --- */
+
+.card-ctx {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
+  gap: 6px;
+  margin-top: 6px;
   font-size: 12px;
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
-  color: var(--text2);
+  line-height: 1;
+  overflow: hidden;
 }
 
-.card-git {
-  color: var(--blue);
+.ctx-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.card-tokens {
-  color: var(--text2);
-  opacity: 0.7;
+.ctx-folder {
+  background: #3A3A3C;
+  color: #AEAEB2;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.ctx-git {
+  background: rgba(10, 132, 255, 0.15);
+  color: #64B5F6;
+  flex-shrink: 0;
+}
+
+.ctx-dirty {
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.ctx-tokens {
+  background: rgba(152, 152, 157, 0.15);
+  color: #AEAEB2;
+  flex-shrink: 0;
+  margin-left: auto;
 }
 
 .card-summary {
@@ -491,7 +531,7 @@ header h1 {
   inset: 0;
   background: rgba(0, 0, 0, 0.6);
   z-index: 100;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
 }
 
@@ -501,10 +541,10 @@ header h1 {
 
 #modal {
   background: #2C2C2E;
-  width: 100%;
+  width: calc(100% - 32px);
   max-width: 500px;
-  border-radius: 16px 16px 0 0;
-  padding: 20px 16px calc(20px + var(--safe-b));
+  border-radius: 16px;
+  padding: 20px 16px;
   max-height: 85vh;
   overflow-y: auto;
 }
