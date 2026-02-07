@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import type { ManagedSession, ClaudeEvent, RcMarker } from './types';
+import type { PermissionAction } from './components/PermissionPrompt';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useNotifications } from './hooks/useNotifications';
 import { Header } from './components/Header';
@@ -221,6 +222,19 @@ export default function App() {
     apiPost('/api/sessions/' + sid + '/cancel', {});
   }, []);
 
+  // Permission action (Yes/Allow All/No)
+  const handlePermissionAction = useCallback(
+    (sessionId: string, action: PermissionAction) => {
+      const keyMap: Record<PermissionAction, string[]> = {
+        yes: ['Enter'],
+        allow_all: ['BTab'],
+        no: ['Escape'],
+      };
+      apiPost('/api/sessions/' + sessionId + '/keys', { keys: keyMap[action] });
+    },
+    [],
+  );
+
   // Dismiss (hide from UI, keep tmux)
   const handleDismiss = useCallback((id: string) => {
     setSessions((prev) => {
@@ -292,6 +306,7 @@ export default function App() {
           onSelect={handleSelect}
           onDismiss={handleDismiss}
           onClose={handleClose}
+          onPermissionAction={handlePermissionAction}
         />
         {selectedId && <EventFeed events={selectedEvents} />}
       </div>

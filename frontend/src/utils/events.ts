@@ -119,8 +119,12 @@ export function eventDescription(ev: ClaudeEvent): string {
   if (ev.type === 'session_start') return 'Session started';
   if (ev.type === 'session_end') return 'Session ended';
   if (ev.type === 'user_prompt_submit') return 'Prompt';
-  if (ev.type === 'notification')
+  if (ev.type === 'notification') {
+    if (ev.tool && ev.toolInput) {
+      return permissionToolSummary(ev.tool, ev.toolInput);
+    }
     return ev.marker ? ev.marker.message : 'Waiting for input';
+  }
   if (!t) return ev.type;
 
   // MCP tools
@@ -179,6 +183,26 @@ export function humanizeCurrentTool(tool: string | undefined): string {
 }
 
 /**
+ * Build a short tool-specific summary for a permission request.
+ */
+function permissionToolSummary(tool: string, toolInput: Record<string, unknown>): string {
+  if (tool === 'Edit') return 'Approve edit: ' + basename(toolInput.file_path as string);
+  if (tool === 'Write') return 'Approve write: ' + basename(toolInput.file_path as string);
+  if (tool === 'Read') return 'Approve read: ' + basename(toolInput.file_path as string);
+  if (tool === 'Bash') {
+    const desc = toolInput.description as string;
+    const cmd = toolInput.command as string;
+    return 'Approve: ' + truncate(desc || cmd, 60);
+  }
+  if (tool === 'AskUserQuestion') {
+    const questions = toolInput.questions as Array<{ question?: string }> | undefined;
+    if (questions && questions[0]?.question) return truncate(questions[0].question, 80);
+    return 'Asking a question';
+  }
+  return 'Approve: ' + tool;
+}
+
+/**
  * Generate action summary text for a session card.
  */
 export function actionSummary(
@@ -187,10 +211,14 @@ export function actionSummary(
 ): string {
   if (cancelling) return 'Cancelling...';
   if (session.status === 'offline') return 'Disconnected';
-  if (session.status === 'waiting')
+  if (session.status === 'waiting') {
+    if (session.permissionRequest) {
+      return permissionToolSummary(session.permissionRequest.tool, session.permissionRequest.toolInput);
+    }
     return session.lastMarker
       ? session.lastMarker.message
       : 'Waiting for input';
+  }
   if (session.lastMarker && session.status === 'idle')
     return session.lastMarker.message;
   if (session.currentTool) return humanizeCurrentTool(session.currentTool);

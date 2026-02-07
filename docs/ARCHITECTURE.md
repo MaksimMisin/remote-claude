@@ -97,7 +97,8 @@ HTTP server on `0.0.0.0:4080` with routes:
 | POST | `/api/sessions` | Create managed tmux session |
 | POST | `/api/sessions/:id/prompt` | Send prompt to session's tmux pane |
 | POST | `/api/sessions/:id/cancel` | Send Ctrl+C to session |
-| DELETE | `/api/sessions/:id` | Kill session |
+| POST | `/api/sessions/:id/keys` | Send tmux keys (Enter, Escape, BTab, etc.) |
+| DELETE | `/api/sessions/:id` | Kill session's tmux window |
 | POST | `/event` | Ingest hook event |
 
 WebSocket on `/ws` upgrade. On connect, sends: `connected`, `sessions`, per-session `history` (last 50 events per session). Streams `event`, `session_update`, `marker` messages in real-time.
@@ -110,6 +111,10 @@ Static file serving from `public/` directory.
 - `id` = first 8 chars of Claude session UUID
 - `name` = last component of cwd (e.g. "remote-claude")
 - `tmuxTarget` = from event (e.g. "Personal:3.0")
+
+**Manual creation:** Creates a named window in the shared `remote-claude` tmux session. If the session doesn't exist, creates it. Returns the tmux target (e.g. `remote-claude:1.0`).
+
+**Deletion:** Kills the session's tmux window (not the entire tmux session), preserving other windows.
 
 **Status tracking from hook events:**
 | Event Type | Status Transition |
@@ -139,12 +144,14 @@ Static file serving from `public/` directory.
 ### 3.4 TmuxController.ts -- tmux Wrappers
 
 - `listSessions()` -- Returns all tmux session names
-- `createSession(id, cwd)` -- Spawns new tmux session running `claude`
+- `listPanes()` -- Returns all tmux panes as `session:window.pane` targets
+- `createSession(id, cwd, windowName, flags?)` -- Creates a new window in the shared `remote-claude` tmux session (creates the session if it doesn't exist). Returns the tmux target.
 - `sendPrompt(target, text)` -- Safe text injection via load-buffer/paste-buffer + Enter
 - `sendCancel(target)` -- Sends Ctrl+C
-- `killSession(session)` -- Kills tmux session
+- `sendKeys(target, ...keys)` -- Sends whitelisted tmux keys (Enter, Escape, BTab, Tab, Space, arrow keys, Ctrl combos). Used for permission prompt responses.
+- `killWindow(target)` -- Kills a tmux window by target
 
-Target validation: `/^[a-zA-Z0-9_:.\-]+$/` (supports `session:window.pane` format).
+Target validation: `/^[a-zA-Z0-9_:.\- ]+$/` (supports `session:window.pane` format, allows spaces in session names).
 
 ### 3.5 MarkerParser.ts -- rc Marker Parsing
 
@@ -153,23 +160,25 @@ Returns `{ category, message }` or null. Validates against known categories.
 
 ---
 
-## 4. Frontend (public/index.html)
+## 4. Frontend (React + Vite)
 
-Single-file mobile web UI (~500 lines) with inline CSS and vanilla JavaScript.
+React/Vite app in `frontend/`, built to `public/` as static assets. Mobile-first dark theme.
 
 ### Features
 - **Session cards** sorted by priority: waiting > working > idle > offline
 - **Status dots**: green pulse (working), amber fast pulse (waiting), blue static (idle), gray (offline)
+- **Permission prompt UI**: Inline permission requests on session cards with Yes/Allow All/No buttons. Shows tool-specific details (file paths for Edit/Write, commands for Bash, questions for AskUserQuestion). Sends tmux keys (Enter/BTab/Escape) via `/api/sessions/:id/keys`.
 - **Human-readable event feed** per selected session (newest first):
   - Filters out `pre_tool_use` events (only shows `post_tool_use` to avoid duplicates)
   - Bash commands show their `description` field instead of raw commands
   - File operations show just the filename, not the full path
   - MCP tools (browser automation) parsed to readable names ("Taking screenshot", "Clicking", "Navigating")
   - Agent tasks show their description ("Agent: Check Chrome dashboard state")
+  - Permission requests show tool-specific summaries ("Approve edit: handler.ts")
   - **User prompts** shown in blue bubbles with the prompt text
   - **Claude responses** shown in gray bubbles on stop events (from transcript)
   - Error states shown in red
-- **Prompt input** fixed to bottom with Send/Cancel buttons
+- **Multiline textarea input** with Cmd/Ctrl+Enter to send (replaces single-line text input)
 - **Session switching** by tapping cards
 - **WebSocket** with auto-reconnect (exponential backoff 1s -> 30s)
 - **Web Notifications** for status changes (working->idle, working->waiting)
@@ -257,8 +266,6 @@ interface ClaudeEvent {
 ## 7. What's Not Built Yet
 - Voice/TTS (Web Speech API) -- deferred from MVP
 - Service Worker for offline + background push notifications
-- Permission prompt detection and response
-- Session spawn from web UI (API exists but untested from UI)
 - Auth token validation on API routes
 - QR code display for mobile setup
 - Multi-user support

@@ -19,7 +19,7 @@ export function InputArea({
   const [text, setText] = useState('');
   const [images, setImages] = useState<PendingImage[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const textInputRef = useRef<HTMLInputElement>(null);
+  const textInputRef = useRef<HTMLTextAreaElement>(null);
   const inputAreaRef = useRef<HTMLDivElement>(null);
 
   // Reset state and focus input when session changes
@@ -67,7 +67,7 @@ export function InputArea({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault();
         handleSend();
       }
@@ -127,11 +127,10 @@ export function InputArea({
         >
           {'\uD83D\uDCCE'}
         </button>
-        <input
-          type="text"
+        <textarea
           ref={textInputRef}
-          placeholder="Send a message..."
-          enterKeyHint="send"
+          placeholder="Send a message... (⌘↵ to send)"
+          rows={1}
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
