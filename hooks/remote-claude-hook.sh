@@ -112,7 +112,7 @@ case "$EVENT_TYPE" in
         flatten | join("\n")
       ' 2>/dev/null)" || true
       if [ -n "$RESPONSE" ]; then
-        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 500)"
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 4000)"
       fi
     fi
     ;;
@@ -149,8 +149,8 @@ case "$EVENT_TYPE" in
       done < <(tail -10 "$TRANSCRIPT_PATH" 2>/dev/null)
 
       if [ -n "$RESPONSE" ]; then
-        # Take last 500 chars for assistantText
-        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 500)"
+        # Take last 4000 chars for assistantText
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 4000)"
 
         # Look for <!--rc:CATEGORY:MESSAGE--> pattern (also escaped variant)
         # Use perl for reliable regex extraction
@@ -200,7 +200,7 @@ case "$EVENT_TYPE" in
         flatten | join("\n")
       ' 2>/dev/null)" || true
       if [ -n "$RESPONSE" ]; then
-        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 500)"
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 4000)"
       fi
     fi
     ;;

@@ -8,7 +8,7 @@
   padding: 0;
 }
 
-html, body {
+html, body, #root {
   height: 100%;
   overflow: hidden;
 }
@@ -278,7 +278,7 @@ header h1 {
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.4;
-  max-height: 120px;
+  max-height: 300px;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
 }
