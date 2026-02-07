@@ -1,5 +1,6 @@
 import type React from 'react';
 import type { ManagedSession } from '../types';
+import type { PermissionAction } from './PermissionPrompt';
 import { SessionCard } from './SessionCard';
 
 const STATUS_ORDER: Record<string, number> = {
@@ -16,6 +17,7 @@ interface SessionListProps {
   onSelect: (id: string | null) => void;
   onDismiss: (id: string) => void;
   onClose: (id: string) => void;
+  onPermissionAction?: (sessionId: string, action: PermissionAction) => void;
 }
 
 export function SessionList({
@@ -25,6 +27,7 @@ export function SessionList({
   onSelect,
   onDismiss,
   onClose,
+  onPermissionAction,
 }: SessionListProps): React.ReactElement {
   const sorted = Object.values(sessions).sort((a, b) => {
     const oa = STATUS_ORDER[a.status] ?? 9;
@@ -56,6 +59,7 @@ export function SessionList({
             onClick={() => onSelect(null)}
             onDismiss={() => onDismiss(selected.id)}
             onClose={() => onClose(selected.id)}
+            onPermissionAction={onPermissionAction ? (action) => onPermissionAction(selected.id, action) : undefined}
           />
         </div>
       );
