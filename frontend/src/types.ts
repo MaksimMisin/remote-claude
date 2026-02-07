@@ -1,9 +1,5 @@
-// ============================================================
-// Shared types for Remote Claude
-// Used by: server, hook (as reference), frontend (inline)
-// ============================================================
-
-// --- Session Types ---
+// Frontend types for Remote Claude
+// Mirrors shared/types.ts but kept local to avoid build complexity
 
 export type SessionStatus = 'idle' | 'working' | 'waiting' | 'offline';
 
@@ -21,13 +17,10 @@ export interface ManagedSession {
   lastMarker?: RcMarker;
   lastAssistantText?: string;
   windowName?: string;
-  flags?: string;
   gitBranch?: string;
   gitDirty?: boolean;
   totalTokens?: number;
 }
-
-// --- Event Types ---
 
 export type HookEventType =
   | 'pre_tool_use'
@@ -57,8 +50,6 @@ export interface ClaudeEvent {
   totalTokens?: number;
 }
 
-// --- TTS Marker Types ---
-
 export type MarkerCategory =
   | 'notification'
   | 'summary'
@@ -73,8 +64,6 @@ export interface RcMarker {
   message: string;
 }
 
-// --- WebSocket Protocol ---
-
 export type ServerMessage =
   | { type: 'connected'; payload: { version: string } }
   | { type: 'sessions'; payload: ManagedSession[] }
@@ -86,4 +75,12 @@ export type ServerMessage =
 
 export type ClientMessage =
   | { type: 'subscribe' }
-  | { type: 'ping' };
+  | { type: 'ping' }
+  | { type: 'select_session'; payload: { sessionId: string } };
+
+export interface PendingImage {
+  name: string;
+  dataUrl: string;
+  base64: string;
+  mimeType: string;
+}

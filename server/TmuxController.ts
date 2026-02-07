@@ -50,14 +50,30 @@ export async function listManagedSessions(): Promise<string[]> {
   return all.filter(name => name.startsWith(TMUX_SESSION_PREFIX));
 }
 
-export async function createSession(id: string, cwd: string): Promise<string> {
+/** Validate and parse a flags string into an array of safe CLI flags. */
+function parseFlags(flags: string): string[] {
+  const parts = flags.split(/\s+/).filter(Boolean);
+  for (const part of parts) {
+    if (!part.startsWith('-')) {
+      throw new Error(`Invalid flag (must start with - or --): ${part}`);
+    }
+    // Block shell metacharacters
+    if (/[;&|`$(){}!<>]/.test(part)) {
+      throw new Error(`Invalid characters in flag: ${part}`);
+    }
+  }
+  return parts;
+}
+
+export async function createSession(id: string, cwd: string, flags?: string): Promise<string> {
   const tmuxName = `${TMUX_SESSION_PREFIX}${id}`;
   validateSessionName(tmuxName);
+  const claudeArgs = flags ? parseFlags(flags) : ['--dangerously-skip-permissions'];
   await execFileAsync('tmux', [
     'new-session', '-d',
     '-s', tmuxName,
     '-c', cwd,
-    'claude', '--dangerously-skip-permissions',
+    'claude', ...claudeArgs,
   ]);
   return tmuxName;
 }
@@ -79,6 +95,21 @@ export async function sendPrompt(tmuxSession: string, text: string): Promise<voi
 export async function sendCancel(tmuxSession: string): Promise<void> {
   validateTarget(tmuxSession);
   await execFileAsync('tmux', ['send-keys', '-t', tmuxSession, 'C-c']);
+}
+
+export async function getWindowName(target: string): Promise<string> {
+  validateTarget(target);
+  try {
+    const name = await execFileAsync('tmux', ['display-message', '-t', target, '-p', '#W']);
+    return name.trim();
+  } catch {
+    return '';
+  }
+}
+
+export async function killWindow(target: string): Promise<void> {
+  validateTarget(target);
+  await execFileAsync('tmux', ['kill-window', '-t', target]);
 }
 
 export async function killSession(tmuxSession: string): Promise<void> {

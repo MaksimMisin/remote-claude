@@ -58,6 +58,18 @@ SESSION_ID="$(echo "$INPUT" | "$JQ" -r '.session_id // "unknown"')"
 CWD="$(echo "$INPUT" | "$JQ" -r '.cwd // ""')"
 [ -z "$CWD" ] && CWD="$(pwd 2>/dev/null || echo unknown)"
 
+# --- Detect git branch and dirty state ---
+GIT_BRANCH=""
+GIT_DIRTY="false"
+if [ -n "$CWD" ] && [ -d "$CWD" ]; then
+  GIT_BRANCH="$(cd "$CWD" && git rev-parse --abbrev-ref HEAD 2>/dev/null)" || true
+  if [ -n "$GIT_BRANCH" ]; then
+    if [ -n "$(cd "$CWD" && git status --porcelain 2>/dev/null | head -1)" ]; then
+      GIT_DIRTY="true"
+    fi
+  fi
+fi
+
 # --- Detect tmux target (session:window.pane) ---
 TMUX_BIN="/opt/homebrew/bin/tmux"
 [ ! -x "$TMUX_BIN" ] && TMUX_BIN="/usr/local/bin/tmux"
@@ -82,11 +94,27 @@ ASSISTANT_TEXT=""
 MARKER_JSON="null"
 SUCCESS="null"
 ERROR=""
+TOTAL_TOKENS="null"
 
 case "$EVENT_TYPE" in
   pre_tool_use)
     TOOL="$(echo "$INPUT" | "$JQ" -r '.tool_name // ""')"
     TOOL_INPUT="$(echo "$INPUT" | "$JQ" -c '.tool_input // {}')"
+    TRANSCRIPT_PATH="$(echo "$INPUT" | "$JQ" -r '.transcript_path // ""')"
+
+    # Extract assistant text since last user message (what Claude said before this tool call)
+    if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+      RESPONSE="$(tail -30 "$TRANSCRIPT_PATH" | "$JQ" -rs '
+        (to_entries | map(select(.value.type == "user")) | last | .key) as $last_user |
+        to_entries | map(select(.key > ($last_user // -1))) |
+        map(.value) | map(select(.type == "assistant")) |
+        map(.message.content | map(select(.type == "text")) | map(.text)) |
+        flatten | join("\n")
+      ' 2>/dev/null)" || true
+      if [ -n "$RESPONSE" ]; then
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 500)"
+      fi
+    fi
     ;;
 
   post_tool_use)
@@ -121,8 +149,8 @@ case "$EVENT_TYPE" in
       done < <(tail -10 "$TRANSCRIPT_PATH" 2>/dev/null)
 
       if [ -n "$RESPONSE" ]; then
-        # Take last 200 chars for assistantText
-        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 200)"
+        # Take last 500 chars for assistantText
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 500)"
 
         # Look for <!--rc:CATEGORY:MESSAGE--> pattern (also escaped variant)
         # Use perl for reliable regex extraction
@@ -148,12 +176,33 @@ case "$EVENT_TYPE" in
           fi
         fi
       fi
+
+      # Extract total token usage from transcript (input + output, excluding cache)
+      TOKEN_SUM="$("$JQ" -r 'select(.type == "assistant") | .message.usage | "\((.input_tokens // 0)) \((.output_tokens // 0))"' "$TRANSCRIPT_PATH" 2>/dev/null | awk '{i+=$1; o+=$2} END {printf "%d", i+o}')" || true
+      if [ -n "$TOKEN_SUM" ] && [ "$TOKEN_SUM" != "0" ]; then
+        TOTAL_TOKENS="$TOKEN_SUM"
+      fi
     fi
     ;;
 
   notification)
     TOOL="$(echo "$INPUT" | "$JQ" -r '.tool_name // ""')"
     TOOL_INPUT="$(echo "$INPUT" | "$JQ" -c '.tool_input // {}')"
+    TRANSCRIPT_PATH="$(echo "$INPUT" | "$JQ" -r '.transcript_path // ""')"
+
+    # Extract assistant text for context (what Claude said before this notification)
+    if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+      RESPONSE="$(tail -30 "$TRANSCRIPT_PATH" | "$JQ" -rs '
+        (to_entries | map(select(.value.type == "user")) | last | .key) as $last_user |
+        to_entries | map(select(.key > ($last_user // -1))) |
+        map(.value) | map(select(.type == "assistant")) |
+        map(.message.content | map(select(.type == "text")) | map(.text)) |
+        flatten | join("\n")
+      ' 2>/dev/null)" || true
+      if [ -n "$RESPONSE" ]; then
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 500)"
+      fi
+    fi
     ;;
 
   user_prompt_submit)
@@ -182,6 +231,9 @@ EVENT_JSON="$(
     --arg assistantText "$ASSISTANT_TEXT" \
     --argjson marker "$MARKER_JSON" \
     --arg tmuxTarget "$TMUX_TARGET" \
+    --arg gitBranch "$GIT_BRANCH" \
+    --arg gitDirty "$GIT_DIRTY" \
+    --argjson totalTokens "$TOTAL_TOKENS" \
     '{
       id: $id,
       timestamp: $timestamp,
@@ -197,6 +249,9 @@ EVENT_JSON="$(
     + (if $assistantText != "" then {assistantText: $assistantText} else {} end)
     + (if $marker != null then {marker: $marker} else {} end)
     + (if $tmuxTarget != "" then {tmuxTarget: $tmuxTarget} else {} end)
+    + (if $gitBranch != "" then {gitBranch: $gitBranch} else {} end)
+    + (if $gitDirty == "true" then {gitDirty: true} else {} end)
+    + (if $totalTokens != null then {totalTokens: $totalTokens} else {} end)
     '
 )" || {
   echo "remote-claude-hook: ERROR: failed to build event JSON" >&2

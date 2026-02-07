@@ -4,8 +4,9 @@
 // ============================================================
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { readFileSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
+import { join, extname, resolve } from 'node:path';
+import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { SERVER_PORT, DATA_DIR } from '../shared/defaults.js';
@@ -210,12 +211,46 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
     if (url === '/api/sessions' && method === 'POST') {
       const body = await readBody(req);
-      const { name, cwd } = JSON.parse(body) as { name: string; cwd: string };
+      const { name, cwd, flags } = JSON.parse(body) as { name: string; cwd: string; flags?: string };
       if (!name || !cwd) {
         return error(res, 'Missing name or cwd');
       }
-      const session = await sessionManager.create(name, cwd);
+      const session = await sessionManager.create(name, cwd, flags);
       return json(res, session, 201);
+    }
+
+    if (url.startsWith('/api/directories') && method === 'GET') {
+      const params = new URL(url, 'http://localhost').searchParams;
+      const prefix = params.get('prefix') || '';
+      const home = homedir();
+      const allowedRoots = [home, '/tmp', '/var', '/opt', '/usr/local'];
+      const targetPath = prefix ? resolve(prefix) : home;
+
+      // Security: only allow paths under home or common code directories
+      const isAllowed = allowedRoots.some(root => targetPath.startsWith(root));
+      if (!isAllowed) {
+        return json(res, { directories: [], base: targetPath });
+      }
+
+      try {
+        const entries = readdirSync(targetPath, { withFileTypes: true });
+        const directories = entries
+          .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+          .map(e => join(targetPath, e.name))
+          .sort();
+        return json(res, { directories, base: targetPath });
+      } catch {
+        // Permission denied, not found, etc.
+        return json(res, { directories: [], base: targetPath });
+      }
+    }
+
+    if (url === '/api/recent-dirs' && method === 'GET') {
+      const cwds = new Set<string>();
+      for (const session of sessionManager.list()) {
+        if (session.cwd) cwds.add(session.cwd);
+      }
+      return json(res, { directories: Array.from(cwds) });
     }
 
     // Session-specific routes
@@ -270,6 +305,26 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
       if (route.action === 'cancel' && method === 'POST') {
         await sessionManager.sendCancel(route.id);
+        // Set a synthetic _cancelling tool so the frontend can show "Cancelling..."
+        // The next real hook event will overwrite this.
+        if (session.status === 'working') {
+          session.currentTool = '_cancelling';
+          broadcast({ type: 'session_update', payload: session });
+        }
+        return json(res, { ok: true });
+      }
+
+      if (route.action === 'dismiss' && method === 'POST') {
+        const dismissed = sessionManager.dismiss(route.id);
+        if (!dismissed) return error(res, 'Session not found', 404);
+        broadcast({ type: 'session_removed', payload: { sessionId: route.id } });
+        return json(res, { ok: true });
+      }
+
+      if (route.action === 'close' && method === 'POST') {
+        const closed = await sessionManager.close(route.id);
+        if (!closed) return error(res, 'Session not found', 404);
+        broadcast({ type: 'session_removed', payload: { sessionId: route.id } });
         return json(res, { ok: true });
       }
 
