@@ -13,6 +13,7 @@ import { SERVER_PORT, DATA_DIR } from '../shared/defaults.js';
 import type { ClaudeEvent, ServerMessage } from '../shared/types.js';
 import { SessionManager } from './SessionManager.js';
 import { EventProcessor } from './EventProcessor.js';
+import { PushManager } from './PushManager.js';
 import { capturePane } from './TmuxController.js';
 import { mkdirSync } from 'node:fs';
 
@@ -63,6 +64,8 @@ function broadcast(msg: ServerMessage): void {
 
 // --- Initialize components ---
 
+const pushManager = new PushManager();
+
 const eventProcessor = new EventProcessor((event: ClaudeEvent) => {
   broadcast({ type: 'event', payload: event });
 
@@ -78,9 +81,43 @@ const eventProcessor = new EventProcessor((event: ClaudeEvent) => {
   sessionManager.handleEvent(event);
 });
 
+/** Track previous session statuses for push notification transitions */
+const prevStatuses = new Map<string, string>();
+
 const sessionManager = new SessionManager(
   (session) => {
     broadcast({ type: 'session_update', payload: session });
+
+    // Send push notifications for important status transitions
+    const prev = prevStatuses.get(session.id);
+    prevStatuses.set(session.id, session.status);
+
+    const name = session.customName || session.name;
+    const snippet = session.lastAssistantText
+      ?.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim().slice(0, 200) || '';
+
+    if (prev === 'working' && session.status === 'waiting') {
+      pushManager.sendToAll({
+        title: name + ' needs input',
+        body: snippet || session.lastMarker?.message || 'Waiting for response',
+        tag: 'rc-' + session.id,
+        urgent: true,
+      });
+    } else if (prev === 'working' && session.status === 'idle') {
+      pushManager.sendToAll({
+        title: name + ' finished',
+        body: snippet || session.lastMarker?.message || 'Task complete',
+        tag: 'rc-' + session.id,
+        urgent: false,
+      });
+    } else if (session.status === 'waiting' && prev !== 'waiting' && prev !== undefined) {
+      pushManager.sendToAll({
+        title: name + ' needs input',
+        body: snippet || session.lastMarker?.message || 'Waiting for response',
+        tag: 'rc-' + session.id,
+        urgent: true,
+      });
+    }
   },
   (sessionId) => {
     broadcast({ type: 'session_removed', payload: { sessionId } });
@@ -292,6 +329,30 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         if (session.cwd) cwds.add(session.cwd);
       }
       return json(res, { directories: Array.from(cwds) });
+    }
+
+    // --- Push notification routes ---
+
+    if (url === '/api/push/vapid-key' && method === 'GET') {
+      return json(res, { publicKey: pushManager.publicKey });
+    }
+
+    if (url === '/api/push/subscribe' && method === 'POST') {
+      const body = await readBody(req);
+      const subscription = JSON.parse(body);
+      if (!subscription.endpoint || !subscription.keys) {
+        return error(res, 'Invalid push subscription');
+      }
+      pushManager.subscribe(subscription);
+      return json(res, { ok: true });
+    }
+
+    if (url === '/api/push/subscribe' && method === 'DELETE') {
+      const body = await readBody(req);
+      const { endpoint } = JSON.parse(body);
+      if (!endpoint) return error(res, 'Missing endpoint');
+      pushManager.unsubscribe(endpoint);
+      return json(res, { ok: true });
     }
 
     // Session-specific routes

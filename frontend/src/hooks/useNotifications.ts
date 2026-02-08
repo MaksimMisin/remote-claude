@@ -8,8 +8,68 @@ const STORAGE_KEY = 'rc-notification-mode';
 interface UseNotificationsReturn {
   mode: NotificationMode;
   toggle: () => void;
-  notify: (title: string, body: string, urgent: boolean, forceShow?: boolean) => void;
+  notify: (title: string, body: string, urgent: boolean) => void;
 }
+
+// --- Push subscription helpers ---
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from(rawData, (char) => char.charCodeAt(0));
+}
+
+async function subscribeToPush(reg: ServiceWorkerRegistration): Promise<void> {
+  try {
+    const existing = await reg.pushManager.getSubscription();
+    if (existing) {
+      console.log('[RC] Already subscribed to push');
+      return;
+    }
+
+    const res = await fetch('/api/push/vapid-key');
+    if (!res.ok) {
+      console.warn('[RC] Failed to get VAPID key:', res.status);
+      return;
+    }
+    const { publicKey } = await res.json();
+
+    const sub = await reg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey) as BufferSource,
+    });
+
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(sub.toJSON()),
+    });
+
+    console.log('[RC] Push subscription registered');
+  } catch (err) {
+    console.warn('[RC] Push subscription failed:', err);
+  }
+}
+
+async function unsubscribePush(reg: ServiceWorkerRegistration): Promise<void> {
+  try {
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+    const endpoint = sub.endpoint;
+    await sub.unsubscribe();
+    await fetch('/api/push/subscribe', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
+    }).catch(() => {});
+    console.log('[RC] Push subscription removed');
+  } catch (err) {
+    console.warn('[RC] Push unsubscribe failed:', err);
+  }
+}
+
+// --- Hook ---
 
 export function useNotifications(): UseNotificationsReturn {
   const [mode, setMode] = useState<NotificationMode>(() => {
@@ -26,7 +86,7 @@ export function useNotifications(): UseNotificationsReturn {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const swRegRef = useRef<ServiceWorkerRegistration | null>(null);
 
-  // Register service worker on mount
+  // Register service worker and set up push subscription on mount
   useEffect(() => {
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker
@@ -34,6 +94,10 @@ export function useNotifications(): UseNotificationsReturn {
         .then((reg) => {
           swRegRef.current = reg;
           console.log('[RC] Service worker registered, scope:', reg.scope);
+          // Subscribe to push if notifications are already enabled
+          if (modeRef.current !== 'off') {
+            subscribeToPush(reg);
+          }
         })
         .catch((err) => {
           console.warn('[RC] Service worker registration failed:', err);
@@ -43,9 +107,16 @@ export function useNotifications(): UseNotificationsReturn {
     }
   }, []);
 
-  // Persist mode changes
+  // Persist mode changes and manage push subscription
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
+    const reg = swRegRef.current;
+    if (!reg) return;
+    if (mode === 'off') {
+      unsubscribePush(reg);
+    } else {
+      subscribeToPush(reg);
+    }
   }, [mode]);
 
   const getAudioCtx = useCallback((): AudioContext => {
@@ -129,7 +200,7 @@ export function useNotifications(): UseNotificationsReturn {
   );
 
   const notify = useCallback(
-    (title: string, body: string, urgent: boolean, forceShow = false) => {
+    (title: string, body: string, urgent: boolean) => {
       const m = modeRef.current;
       if (m === 'off') {
         console.log('[RC] notify skipped: mode is off');
@@ -141,16 +212,9 @@ export function useNotifications(): UseNotificationsReturn {
         playSound(urgent);
       }
 
-      const shouldShow = forceShow || document.hidden;
-      if (shouldShow) {
-        showNotification(title, body, urgent, m);
-      } else {
-        // Page is visible — vibrate if in vibrate/full mode
-        console.log('[RC] notify: page visible, mode:', m);
-        if ((m === 'vibrate' || m === 'full') && navigator.vibrate) {
-          navigator.vibrate(urgent ? [200, 100, 200] : [100]);
-        }
-      }
+      // Always show OS notification — this is a mobile-first dashboard and
+      // users need notifications even when the page tab is technically "visible"
+      showNotification(title, body, urgent, m);
     },
     [playSound, showNotification],
   );

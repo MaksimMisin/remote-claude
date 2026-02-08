@@ -424,7 +424,7 @@ export default function App() {
         version={version}
         notificationMode={notifications.mode}
         onToggleNotifications={notifications.toggle}
-        onTestNotification={() => notifications.notify('Test Notification', 'If you see this, notifications work!', true, true)}
+        onTestNotification={() => notifications.notify('Test Notification', 'If you see this, notifications work!', true)}
         onNewSession={() => setModalOpen(true)}
         onGoHome={() => handleSelect(null)}
       />
