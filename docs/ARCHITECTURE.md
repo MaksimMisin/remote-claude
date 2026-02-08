@@ -303,7 +303,17 @@ interface ClaudeEvent {
 
 ---
 
-## 7. What's Not Built Yet
+## 7. Implementation Gotchas
+
+- **Notification hook types**: Claude Code's `Notification` hook fires with `notification_type` field in stdin JSON: `idle_prompt`, `permission_prompt`, `auth_success`, `elicitation_dialog`. Our hook doesn't currently extract this field.
+- **`idle_prompt` timing**: Fires exactly 60s after Stop -- this is Claude Code core behavior, not a Remote Claude bug.
+- **Service worker source path**: `frontend/public/sw.js` is the source. Vite copies it to `public/sw.js` on build. Editing `public/sw.js` directly gets overwritten.
+- **Permission request fallback**: Permission request data falls back to preceding `pre_tool_use` event when the notification event lacks tool info.
+- **`public/index.html`** is a build artifact from the React frontend -- don't edit directly.
+
+---
+
+## 8. What's Not Built Yet
 
 See `docs/ROADMAP.md` for the full list. Key gaps:
 
