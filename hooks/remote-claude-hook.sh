@@ -177,8 +177,8 @@ case "$EVENT_TYPE" in
         fi
       fi
 
-      # Extract total token usage from transcript (input + output, excluding cache)
-      TOKEN_SUM="$("$JQ" -r 'select(.type == "assistant") | .message.usage | "\((.input_tokens // 0)) \((.output_tokens // 0))"' "$TRANSCRIPT_PATH" 2>/dev/null | awk '{i+=$1; o+=$2} END {printf "%d", i+o}')" || true
+      # Extract total token usage from transcript (input + cache + output)
+      TOKEN_SUM="$("$JQ" -r 'select(.type == "assistant") | .message.usage | "\((.input_tokens // 0)) \((.cache_creation_input_tokens // 0)) \((.cache_read_input_tokens // 0)) \((.output_tokens // 0))"' "$TRANSCRIPT_PATH" 2>/dev/null | awk '{i+=$1; cc+=$2; cr+=$3; o+=$4} END {printf "%d", i+cc+cr+o}')" || true
       if [ -n "$TOKEN_SUM" ] && [ "$TOKEN_SUM" != "0" ]; then
         TOTAL_TOKENS="$TOKEN_SUM"
       fi
