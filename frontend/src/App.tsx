@@ -39,6 +39,9 @@ export default function App() {
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
 
+  // Track recently closed/dismissed session IDs to ignore late-arriving updates
+  const recentlyClosedRef = useRef(new Set<string>());
+
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
 
@@ -46,34 +49,30 @@ export default function App() {
   const notificationsRef = useRef(notifications);
   notificationsRef.current = notifications;
 
-  // Resolve Claude's full UUID sessionId to our short session id
-  const resolveSessionId = useCallback(
-    (claudeSessionId: string): string => {
-      for (const s of Object.values(sessionsRef.current)) {
-        if (s.claudeSessionId === claudeSessionId) return s.id;
-      }
-      // Fallback: short ID is first 8 chars of the Claude session UUID
-      return claudeSessionId.slice(0, 8);
-    },
+  // Key events by shortId of Claude UUID (first 8 chars).
+  // This matches EventProcessor's keying and avoids timing issues where
+  // sessionsRef isn't populated yet when bulk history arrives.
+  const eventKey = useCallback(
+    (claudeSessionId: string): string => claudeSessionId.slice(0, 8),
     [],
   );
 
   const addEvent = useCallback(
     (ev: ClaudeEvent, bulk = false) => {
-      const sid = resolveSessionId(ev.sessionId);
+      const key = eventKey(ev.sessionId);
       setEvents((prev) => {
-        const list = prev[sid] || [];
+        const list = prev[key] || [];
         // Avoid duplicates
         if (list.some((e) => e.id === ev.id)) return prev;
         let updated = [...list, ev];
         // Keep last 1000 events per session
         if (updated.length > 1000) updated = updated.slice(-1000);
-        return { ...prev, [sid]: updated };
+        return { ...prev, [key]: updated };
       });
       // Bulk events don't need immediate re-render triggers
       void bulk;
     },
-    [resolveSessionId],
+    [eventKey],
   );
 
   const showBanner = useCallback(
@@ -113,6 +112,8 @@ export default function App() {
       setSessions(map);
     },
     onSessionUpdate: (session: ManagedSession) => {
+      // Ignore updates for sessions we recently closed/dismissed locally
+      if (recentlyClosedRef.current.has(session.id)) return;
       setSessions((prev) => {
         const prevSession = prev[session.id];
         const prevStatus = prevSession?.status;
@@ -314,6 +315,19 @@ export default function App() {
 
   // Dismiss (hide from UI, keep tmux)
   const handleDismiss = useCallback((id: string) => {
+    // Suppress late-arriving session_update for this session and any
+    // auto-discovered ghost (keyed by claudeSessionId prefix)
+    const session = sessionsRef.current[id];
+    recentlyClosedRef.current.add(id);
+    if (session?.claudeSessionId) {
+      recentlyClosedRef.current.add(session.claudeSessionId.slice(0, 8));
+    }
+    setTimeout(() => {
+      recentlyClosedRef.current.delete(id);
+      if (session?.claudeSessionId) {
+        recentlyClosedRef.current.delete(session.claudeSessionId.slice(0, 8));
+      }
+    }, 30_000);
     setSessions((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -331,6 +345,17 @@ export default function App() {
 
   // Close (kill tmux window + remove)
   const handleClose = useCallback((id: string) => {
+    const session = sessionsRef.current[id];
+    recentlyClosedRef.current.add(id);
+    if (session?.claudeSessionId) {
+      recentlyClosedRef.current.add(session.claudeSessionId.slice(0, 8));
+    }
+    setTimeout(() => {
+      recentlyClosedRef.current.delete(id);
+      if (session?.claudeSessionId) {
+        recentlyClosedRef.current.delete(session.claudeSessionId.slice(0, 8));
+      }
+    }, 30_000);
     setSessions((prev) => {
       const next = { ...prev };
       delete next[id];
@@ -372,9 +397,13 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  const selectedEvents = selectedId ? events[selectedId] || [] : [];
-  const queuedSessionIds = useMemo(() => new Set(Object.keys(queuedPrompts)), [queuedPrompts]);
   const selectedSession = selectedId ? sessions[selectedId] : undefined;
+  // Events are keyed by claudeSessionId prefix (matches EventProcessor)
+  const selectedEventsKey = selectedSession?.claudeSessionId
+    ? selectedSession.claudeSessionId.slice(0, 8)
+    : selectedId;
+  const selectedEvents = selectedEventsKey ? events[selectedEventsKey] || [] : [];
+  const queuedSessionIds = useMemo(() => new Set(Object.keys(queuedPrompts)), [queuedPrompts]);
 
   return (
     <div id="app">
@@ -385,6 +414,7 @@ export default function App() {
         notificationsEnabled={notifications.enabled}
         onToggleNotifications={notifications.toggle}
         onNewSession={() => setModalOpen(true)}
+        onGoHome={() => handleSelect(null)}
       />
 
       {banner.visible && <div id="banner" className="visible">{banner.text}</div>}

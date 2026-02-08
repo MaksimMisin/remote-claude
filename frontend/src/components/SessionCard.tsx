@@ -1,4 +1,4 @@
-import { memo, useRef, useState } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 import type { ManagedSession } from '../types';
 import { relativeTime, formatTokens } from '../utils/time';
 import { actionSummary, stripMarkers } from '../utils/events';
@@ -58,6 +58,7 @@ export const SessionCard = memo(function SessionCard({
   let className = 'card';
   if (selected) className += ' selected';
   if (isWaiting && !selected) className += ' card-waiting';
+  if (session.status === 'offline') className += ' card-offline';
 
   // Prefer tmux window name (LLM-generated or human-overridden) over auto-discovered name
   const displayName = session.windowName
@@ -220,7 +221,7 @@ export const SessionCard = memo(function SessionCard({
           />
         )}
         {showContext && contextText && (
-          <div className="card-context">{contextText}</div>
+          <ExpandableContext text={contextText} />
         )}
         {isWaiting && !hasPerm && session.lastMarker && !contextText && (
           <div className="card-marker">{session.lastMarker.message}</div>
@@ -229,3 +230,26 @@ export const SessionCard = memo(function SessionCard({
     </div>
   );
 });
+
+function ExpandableContext({ text }: { text: string }) {
+  const [expanded, setExpanded] = useState(false);
+  // Consider "long" if likely to be clamped (rough heuristic: > 150 chars)
+  const isLong = text.length > 150;
+
+  const toggle = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    setExpanded((v) => !v);
+  }, []);
+
+  return (
+    <div
+      className={`card-context${expanded ? ' card-context-expanded' : ''}`}
+      onClick={isLong ? toggle : undefined}
+    >
+      {text}
+      {isLong && (
+        <div className="expand-hint">{expanded ? 'Tap to collapse' : 'Tap to expand'}</div>
+      )}
+    </div>
+  );
+}

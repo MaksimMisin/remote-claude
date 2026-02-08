@@ -7,6 +7,7 @@ interface HeaderProps {
   notificationsEnabled: boolean;
   onToggleNotifications: () => void;
   onNewSession: () => void;
+  onGoHome: () => void;
 }
 
 export function Header({
@@ -16,6 +17,7 @@ export function Header({
   notificationsEnabled,
   onToggleNotifications,
   onNewSession,
+  onGoHome,
 }: HeaderProps): React.ReactElement {
   const connClass = connected
     ? 'conn-dot connected'
@@ -30,7 +32,7 @@ export function Header({
 
   return (
     <header>
-      <h1>Remote Claude</h1>
+      <h1 className="header-logo" onClick={onGoHome}>Remote Claude</h1>
       <div className="header-right">
         {version && <span className="version-text">v{version}</span>}
         <div className={connClass} title={connTitle} />

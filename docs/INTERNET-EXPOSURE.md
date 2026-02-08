@@ -1,6 +1,6 @@
 # Design Doc: Exposing Remote Claude on the Internet
 
-**Status:** Draft
+**Status:** Approved
 **Date:** 2025-02-08
 **Goal:** Access the Remote Claude dashboard from outside the home network at `claude.example.com`
 
@@ -88,9 +88,14 @@ server.listen(SERVER_PORT, '0.0.0.0', () => { ... });
 server.listen(SERVER_PORT, '127.0.0.1', () => { ... });
 ```
 
-**Trade-off:** If you sometimes access the dashboard from another machine on your LAN (e.g., desktop → laptop), this breaks that. Options:
-- Use the Cloudflare URL even on LAN (adds ~50ms latency)
-- Make the bind address configurable via env var: `BIND_HOST=0.0.0.0 npm run dev`
+**Decision:** Keep LAN access as a fallback (in case Cloudflare is down). Make the bind address configurable via env var, defaulting to `0.0.0.0`:
+
+```typescript
+const BIND_HOST = process.env.BIND_HOST || '0.0.0.0';
+server.listen(SERVER_PORT, BIND_HOST, () => { ... });
+```
+
+LAN access is unauthenticated but acceptable -- anyone on the LAN is trusted. The `/event` endpoint protection (CF header check + hook secret) still applies regardless of bind address.
 
 ### 2. Protect the `/event` endpoint
 
@@ -153,7 +158,7 @@ This is the main authentication layer. Options for the access policy:
 
 **Recommendation: GitHub OAuth.** You're a developer, it's one-click, and Cloudflare Access supports it natively. Restrict to your GitHub username only.
 
-Session duration: **24 hours** (re-authenticate once a day). Reasonable for a monitoring dashboard.
+Session duration: **30 days.** This is a personal monitoring dashboard -- re-authenticating daily is annoying. A month-long session is acceptable given the GitHub OAuth + 2FA chain.
 
 ### 6. Terraform infrastructure
 
@@ -248,12 +253,10 @@ This starts cloudflared on boot automatically.
 
 ---
 
-## Open Questions
+## Resolved Decisions
 
-1. **LAN access:** Do you ever access the dashboard from another machine on your LAN? If so, we need the `BIND_HOST` env var or a way to keep LAN access working alongside the tunnel.
-
-2. **Same tunnel vs. separate tunnel:** We could add an ingress rule to the existing HA tunnel instead of creating a new one. Simpler infra (one cloudflared process), but couples the two projects. Recommendation: separate tunnel (clean separation, independent lifecycle).
-
-3. **Terraform location:** The `network/` directory in remote-claude is clean and self-contained, but you'd need to duplicate `cloudflare_api_token` and `cloudflare_account_id`. Alternatively, manage all DNS/tunnels from the HA repo. What's your preference?
-
-4. **Access policy scope:** Should the Access policy protect only the dashboard, or also the API endpoints? Cloudflare Access can be scoped to specific paths. Recommendation: protect everything (`claude.example.com/*`) -- simpler and more secure.
+1. **LAN access:** Keep it. Bind to `0.0.0.0` by default, configurable via `BIND_HOST` env var.
+2. **Tunnel:** Separate tunnel in `network/` directory (clean separation from HA).
+3. **Terraform:** Self-contained in this repo's `network/` directory. Duplicates Cloudflare creds in tfvars (acceptable).
+4. **Access policy scope:** Protect everything (`claude.example.com/*`).
+5. **Session duration:** 30 days.

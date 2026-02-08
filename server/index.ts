@@ -15,6 +15,15 @@ import { SessionManager } from './SessionManager.js';
 import { EventProcessor } from './EventProcessor.js';
 import { mkdirSync } from 'node:fs';
 
+const BIND_HOST = process.env.BIND_HOST || '0.0.0.0';
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'same-origin',
+};
+
 const UPLOADS_DIR = join(DATA_DIR, 'uploads');
 
 const VERSION = '0.1.0';
@@ -23,6 +32,20 @@ const PUBLIC_DIR = join(import.meta.dirname, '..', 'public');
 // Ensure data directories exist
 if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+
+const HOOK_SECRET_FILE = join(DATA_DIR, 'hook-secret.txt');
+
+function getOrCreateHookSecret(): string {
+  if (existsSync(HOOK_SECRET_FILE)) {
+    return readFileSync(HOOK_SECRET_FILE, 'utf-8').trim();
+  }
+  const secret = randomBytes(32).toString('hex');
+  writeFileSync(HOOK_SECRET_FILE, secret, { mode: 0o600 });
+  console.log(`[Server] Generated hook secret in ${HOOK_SECRET_FILE}`);
+  return secret;
+}
+
+const HOOK_SECRET = getOrCreateHookSecret();
 
 // --- WebSocket client management ---
 
@@ -87,9 +110,10 @@ function readBody(req: IncomingMessage): Promise<string> {
 function json(res: ServerResponse, data: unknown, status = 200): void {
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Origin': CORS_ORIGIN,
     'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
+    ...SECURITY_HEADERS,
   });
   res.end(JSON.stringify(data));
 }
@@ -140,7 +164,8 @@ function serveStatic(res: ServerResponse, urlPath: string): void {
     const ext = extname(filePath);
     res.writeHead(200, {
       'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': CORS_ORIGIN,
+      ...SECURITY_HEADERS,
     });
     res.end(content);
   } catch {
@@ -165,9 +190,10 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
   // CORS preflight
   if (method === 'OPTIONS') {
     res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Origin': CORS_ORIGIN,
       'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
+      ...SECURITY_HEADERS,
     });
     res.end();
     return;
@@ -191,6 +217,15 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
     }
 
     if (url === '/event' && method === 'POST') {
+      // Block event ingestion from Cloudflare tunnel (external traffic)
+      if (req.headers['cf-connecting-ip']) {
+        return error(res, 'Forbidden', 403);
+      }
+      // Validate hook secret if provided (defense in depth)
+      const hookSecret = req.headers['x-hook-secret'];
+      if (hookSecret && hookSecret !== HOOK_SECRET) {
+        return error(res, 'Invalid hook secret', 403);
+      }
       const body = await readBody(req);
       const event = JSON.parse(body) as ClaudeEvent;
       if (!event.id || !event.type) {
@@ -384,8 +419,13 @@ wss.on('connection', (ws: WebSocket) => {
   send({ type: 'connected', payload: { version: VERSION } });
   send({ type: 'sessions', payload: sessionManager.list() });
   // Send per-session history so no session gets starved
+  // EventProcessor keys by shortId(claudeSessionId), which differs from
+  // session.id for server-created sessions (random ID vs UUID prefix).
   for (const session of sessionManager.list()) {
-    const sessionHistory = eventProcessor.getSessionHistory(session.id, 50);
+    const historyKey = session.claudeSessionId
+      ? session.claudeSessionId.slice(0, 8)
+      : session.id;
+    const sessionHistory = eventProcessor.getSessionHistory(historyKey, 50);
     if (sessionHistory.length > 0) {
       send({ type: 'history', payload: sessionHistory });
     }
@@ -396,6 +436,18 @@ wss.on('connection', (ws: WebSocket) => {
       const msg = JSON.parse(raw.toString());
       if (msg.type === 'ping') {
         // No-op, keeps connection alive
+      } else if (msg.type === 'select_session' && msg.payload?.sessionId) {
+        // Send history for the selected session
+        const session = sessionManager.get(msg.payload.sessionId);
+        if (session) {
+          const historyKey = session.claudeSessionId
+            ? session.claudeSessionId.slice(0, 8)
+            : session.id;
+          const history = eventProcessor.getSessionHistory(historyKey, 50);
+          if (history.length > 0) {
+            send({ type: 'history', payload: history });
+          }
+        }
       }
     } catch {
       // Ignore malformed messages
@@ -417,8 +469,9 @@ wss.on('connection', (ws: WebSocket) => {
 eventProcessor.startFileWatch();
 sessionManager.startHealthChecks();
 
-server.listen(SERVER_PORT, '0.0.0.0', () => {
-  console.log(`[Server] Remote Claude v${VERSION} listening on http://0.0.0.0:${SERVER_PORT}`);
+server.listen(SERVER_PORT, BIND_HOST, () => {
+  console.log(`[Server] Remote Claude v${VERSION} listening on http://${BIND_HOST}:${SERVER_PORT}`);
+  console.log(`[Server] CORS origin: ${CORS_ORIGIN}`);
   console.log(`[Server] Public dir: ${PUBLIC_DIR}`);
   console.log(`[Server] Data dir: ${DATA_DIR}`);
 });

@@ -12,6 +12,11 @@ set -o pipefail
 DATA_DIR="$HOME/.remote-claude/data"
 EVENTS_FILE="$DATA_DIR/events.jsonl"
 SERVER_URL="http://localhost:4080/event"
+HOOK_SECRET_FILE="$DATA_DIR/hook-secret.txt"
+HOOK_SECRET=""
+if [ -f "$HOOK_SECRET_FILE" ]; then
+  HOOK_SECRET="$(cat "$HOOK_SECRET_FILE" 2>/dev/null)" || true
+fi
 
 # --- Ensure data directory exists ---
 mkdir -p "$DATA_DIR" 2>/dev/null
@@ -265,8 +270,12 @@ echo "$EVENT_JSON" >> "$EVENTS_FILE" 2>/dev/null || {
 
 # --- POST to server (backgrounded, fire and forget) ---
 (
+  HOOK_HEADERS=(-H "Content-Type: application/json")
+  if [ -n "$HOOK_SECRET" ]; then
+    HOOK_HEADERS+=(-H "X-Hook-Secret: $HOOK_SECRET")
+  fi
   curl -s -o /dev/null -X POST \
-    -H "Content-Type: application/json" \
+    "${HOOK_HEADERS[@]}" \
     -d "$EVENT_JSON" \
     --connect-timeout 2 \
     --max-time 5 \

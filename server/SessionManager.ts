@@ -19,6 +19,8 @@ export class SessionManager {
   private healthInterval: ReturnType<typeof setInterval> | null = null;
   private onSessionUpdate: (session: ManagedSession) => void;
   private onSessionRemoved: (sessionId: string) => void;
+  /** claudeSessionIds of recently closed/dismissed sessions — prevents auto-re-discovery from exit hooks */
+  private recentlyClosedClaudeIds = new Set<string>();
 
   constructor(
     onSessionUpdate: (session: ManagedSession) => void,
@@ -133,6 +135,7 @@ export class SessionManager {
   async remove(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session) return false;
+    this.suppressAutoDiscovery(session);
     const target = session.tmuxTarget;
     if (target) {
       try {
@@ -148,7 +151,9 @@ export class SessionManager {
 
   /** Dismiss a session from the dashboard (no tmux action). */
   dismiss(id: string): boolean {
-    if (!this.sessions.has(id)) return false;
+    const session = this.sessions.get(id);
+    if (!session) return false;
+    this.suppressAutoDiscovery(session);
     this.sessions.delete(id);
     this.save();
     return true;
@@ -158,6 +163,8 @@ export class SessionManager {
   async close(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (!session) return false;
+    // Must suppress BEFORE killing tmux — exit hooks fire immediately
+    this.suppressAutoDiscovery(session);
     const target = session.tmuxTarget;
     if (target) {
       try {
@@ -169,6 +176,16 @@ export class SessionManager {
     this.sessions.delete(id);
     this.save();
     return true;
+  }
+
+  /** Prevent auto-re-discovery of a session's Claude process (e.g. from exit hooks). */
+  private suppressAutoDiscovery(session: ManagedSession): void {
+    if (session.claudeSessionId) {
+      this.recentlyClosedClaudeIds.add(session.claudeSessionId);
+      setTimeout(() => {
+        this.recentlyClosedClaudeIds.delete(session.claudeSessionId!);
+      }, 60_000);
+    }
   }
 
   /** Resolve the tmux target for a session (tmuxTarget > tmuxSession). */
@@ -212,7 +229,8 @@ export class SessionManager {
     }
 
     // Auto-discover: create a session for unknown Claude Code instances
-    if (!session && event.sessionId && event.sessionId !== 'unknown') {
+    // Skip if this Claude session was recently closed/dismissed (exit hooks race)
+    if (!session && event.sessionId && event.sessionId !== 'unknown' && !this.recentlyClosedClaudeIds.has(event.sessionId)) {
       // Deduplicate by tmuxTarget: if another session already points to the
       // same pane, replace it (new Claude process reused the pane)
       if (event.tmuxTarget) {
