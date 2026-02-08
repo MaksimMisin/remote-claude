@@ -46,7 +46,7 @@ Server delivers prompt to tmux pane via load-buffer/paste-buffer
 
 5. **React + Vite frontend** -- Component-based React app in `frontend/`, built to `public/` as static assets. Mobile-first dark theme with hooks-based state management.
 
-6. **Web Notifications + Audio** -- Uses browser Notification API for push alerts and Web Audio API for sound alerts. Works when phone screen is off. No service worker needed for basic notifications.
+6. **Web Push + Service Worker** -- Uses Web Push API (VAPID) for reliable background notifications on Android (WebSocket dies when tab is backgrounded). Service worker in `frontend/public/sw.js` handles push events and notification clicks. Client-side notifications still fire when page is active (instant, no external dependency). Four notification modes cycle: off -> silent -> vibrate -> full.
 
 ---
 
@@ -96,10 +96,14 @@ HTTP server on `0.0.0.0:4080` with routes:
 | GET | `/api/debug` | Debug info (sessions, events, uptime) |
 | GET | `/api/directories?prefix=` | List subdirectories (for session creation) |
 | GET | `/api/recent-dirs` | Recent working directories from sessions |
+| GET | `/api/push/vapid-key` | Get VAPID public key for push subscriptions |
+| POST | `/api/push/subscribe` | Register push subscription |
+| DELETE | `/api/push/subscribe` | Unregister push subscription |
 | POST | `/api/sessions` | Create managed tmux session |
 | POST | `/api/sessions/:id/prompt` | Send prompt (text + optional images) |
 | POST | `/api/sessions/:id/cancel` | Send Ctrl+C to session |
 | POST | `/api/sessions/:id/keys` | Send tmux keys (Enter, Escape, BTab, etc.) |
+| POST | `/api/sessions/:id/rename` | Rename session |
 | POST | `/api/sessions/:id/dismiss` | Dismiss session from dashboard |
 | POST | `/api/sessions/:id/close` | Close session (kill tmux window + remove) |
 | DELETE | `/api/sessions/:id` | Kill session's tmux window |
@@ -139,7 +143,7 @@ Static file serving from `public/` directory.
 
 ### 3.3 EventProcessor.ts -- Event Ingestion
 
-- **Per-session** in-memory event store (max 200 events per session) -- prevents one active session from evicting another's history
+- **Per-session** in-memory event store (max 100 events per session) -- prevents one active session from evicting another's history
 - Deduplication via Set of event IDs
 - Parses rc markers from `assistantText` if not already set
 - Watches JSONL file with chokidar for crash recovery (reads new lines from offset)
@@ -162,6 +166,16 @@ Target validation: `/^[a-zA-Z0-9_:.\- ]+$/` (supports `session:window.pane` form
 Parses `<!--rc:CATEGORY:MESSAGE-->` and escaped variant `<\!--rc:...-->`.
 Returns `{ category, message }` or null. Validates against known categories.
 
+### 3.6 PushManager.ts -- Web Push Notifications
+
+Manages Web Push (VAPID) for reliable background notifications on Android/desktop.
+
+- Generates and persists VAPID key pair to `~/.remote-claude/data/vapid-keys.json`
+- Manages push subscriptions (subscribe/unsubscribe), persisted to `~/.remote-claude/data/push-subscriptions.json`
+- `sendToAll(payload)` sends push notification to all registered subscriptions
+- Auto-removes stale subscriptions (410/404 responses from push service)
+- Push notifications triggered on status transitions: working->idle, working->waiting, any->waiting
+
 ---
 
 ## 4. Frontend (React + Vite)
@@ -173,22 +187,31 @@ React/Vite app in `frontend/`, built to `public/` as static assets. Mobile-first
 - **Status dots**: green pulse (working), amber fast pulse (waiting), blue static (idle), gray (offline)
 - **Permission prompt UI**: Inline permission requests on session cards with Yes/Allow All/No buttons. Shows tool-specific details (file paths for Edit/Write, commands for Bash, questions for AskUserQuestion). Sends tmux keys (Enter/BTab/Escape) via `/api/sessions/:id/keys`.
 - **Human-readable event feed** per selected session (newest first):
-  - Filters out `pre_tool_use` events (only shows `post_tool_use` to avoid duplicates)
+  - Shows `pre_tool_use` events only when they have assistant text or expandable tool details (Edit/Bash/Write/ExitPlanMode)
+  - Deduplicates consecutive identical `assistantText` across `pre_tool_use` events
   - Bash commands show their `description` field instead of raw commands
-  - File operations show just the filename, not the full path
+  - Inline expandable diffs for Edit, command previews for Bash, content preview for Write, plan content for ExitPlanMode
   - MCP tools (browser automation) parsed to readable names ("Taking screenshot", "Clicking", "Navigating")
   - Agent tasks show their description ("Agent: Check Chrome dashboard state")
   - Permission requests show tool-specific summaries ("Approve edit: handler.ts")
   - **User prompts** shown in blue bubbles with the prompt text
   - **Claude responses** shown in gray bubbles on stop events (from transcript)
   - Error states shown in red
+  - Long text expandable/collapsible on tap
 - **Multiline textarea input** with Cmd/Ctrl+Enter to send (replaces single-line text input)
 - **Session switching** by tapping cards
 - **WebSocket** with auto-reconnect (exponential backoff 1s -> 30s)
-- **Web Notifications** for status changes (working->idle, working->waiting)
+- **Web Push notifications** via service worker for reliable Android background delivery
+- **Client-side notifications** when page is active (instant, no push service dependency)
+- **4-mode notification cycle** (off -> silent -> vibrate -> full), persisted in localStorage
 - **Audio alerts** via Web Audio API (urgent two-tone for waiting, gentle chime for finished)
 - **Vibration** on mobile for attention-needed events
-- **Bell button** to toggle notifications + initialize AudioContext
+- **Bell button** to cycle notification modes; long-press to test
+- **Image upload** support in prompts (single or multiple, saved to server)
+- **Prompt queue**: prompts sent while session is working are queued and auto-sent on idle
+- **Session rename** by tapping name on selected (expanded) card
+- **Swipe confirmation dialogs** on swipe-to-close and swipe-to-dismiss
+- **Slash command output capture** via tmux pane diffing
 
 ### Notification Triggers
 | Trigger | Sound | Vibration | Web Notification |
@@ -285,7 +308,7 @@ interface ClaudeEvent {
 See `docs/ROADMAP.md` for the full list. Key gaps:
 
 - Voice/TTS (Web Speech API)
-- Service Worker for background push notifications
 - Notification priority tiers (P0-P3)
 - Session detail view with full history
+- Bottom tab navigation / Activity feed / Settings screen
 - Multi-user support

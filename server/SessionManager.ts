@@ -488,16 +488,24 @@ export class SessionManager {
         }
       }
 
-      // Working timeout: if working >2min without activity, set to idle
+      // Status verification: if working/waiting >5min without hook events,
+      // check tmux pane for active progress indicators before marking idle.
       if (
-        session.status === 'working' &&
+        (session.status === 'working' || session.status === 'waiting') &&
         Date.now() - session.lastActivity > WORKING_TIMEOUT_MS
       ) {
-        session.status = 'idle';
-        session.currentTool = undefined;
-        session.currentToolInput = undefined;
-        this.onSessionUpdate(session);
-        changed = true;
+        let stillActive = false;
+        if (session.tmuxTarget) {
+          stillActive = await tmux.isActivelyWorking(session.tmuxTarget);
+        }
+        if (!stillActive) {
+          session.status = 'idle';
+          session.currentTool = undefined;
+          session.currentToolInput = undefined;
+          session.permissionRequest = undefined;
+          this.onSessionUpdate(session);
+          changed = true;
+        }
       }
     }
 
