@@ -41,6 +41,13 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 8. Permission prompts can be approved/rejected from the dashboard via tmux keys
 9. Prompts sent while a session is busy are queued and auto-sent when it becomes idle
 
+## Terminology
+- **Session** = a Claude Code instance. This is the user-facing term in the dashboard UI.
+- **Tmux session** = the tmux concept (contains windows and panes). Always say "tmux session" to distinguish.
+- Server-created sessions run as **windows** in the shared `remote-claude` tmux session.
+- Auto-discovered sessions run in whatever tmux session/window/pane the user launched them in.
+- `tmuxTarget` (e.g. `Personal:3.0`) = `tmuxSession:windowIndex.paneIndex` -- the full tmux address.
+
 ## Architecture Decisions
 - Sessions are auto-discovered from hook events, not from tmux session listing
 - Each event includes `tmuxTarget` (e.g. `Personal:3.0`) for precise pane targeting

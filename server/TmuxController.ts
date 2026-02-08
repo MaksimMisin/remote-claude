@@ -83,7 +83,7 @@ async function sessionExists(): Promise<boolean> {
  * If the session doesn't exist, creates it with this window as the first.
  * Returns the tmux target (e.g. "remote-claude:1.0").
  */
-export async function createSession(id: string, cwd: string, windowName: string, flags?: string): Promise<string> {
+export async function createWindow(id: string, cwd: string, windowName: string, flags?: string): Promise<string> {
   const claudeArgs = flags ? parseFlags(flags) : ['--dangerously-skip-permissions'];
   const exists = await sessionExists();
 
@@ -168,6 +168,19 @@ export async function sendKeys(target: string, ...keys: string[]): Promise<void>
     }
     await execFileAsync('tmux', ['send-keys', '-t', target, key]);
     await sleep(50);
+  }
+}
+
+/** Capture the last N lines of a tmux pane (for reading slash command output). */
+export async function capturePane(target: string, lines = 40): Promise<string> {
+  validateTarget(target);
+  try {
+    const stdout = await execFileAsync('tmux', [
+      'capture-pane', '-t', target, '-p', '-S', `-${lines}`,
+    ]);
+    return stdout;
+  } catch {
+    return '';
   }
 }
 
