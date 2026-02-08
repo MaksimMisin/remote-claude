@@ -18,6 +18,7 @@ export interface ManagedSession {
   lastAssistantText?: string;
   permissionRequest?: { tool: string; toolInput: Record<string, unknown> };
   windowName?: string;
+  customName?: string;
   gitBranch?: string;
   gitDirty?: boolean;
   totalTokens?: number;

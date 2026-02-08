@@ -92,6 +92,30 @@ function AskUserDetail({ toolInput }: { toolInput: Record<string, unknown> }) {
   );
 }
 
+/** Render ExitPlanMode — shows scrollable plan content. */
+function PlanDetail({ toolInput }: { toolInput: Record<string, unknown> }) {
+  const planContent = (toolInput.planContent as string) || '';
+  const planFile = (toolInput.planFile as string) || '';
+  const fileName = planFile.split('/').pop() || 'Plan';
+
+  if (!planContent) {
+    return (
+      <div className="perm-detail">
+        <div className="perm-tool-name">Wants to use: ExitPlanMode</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="perm-detail">
+      <div className="perm-file">{fileName}</div>
+      <div className="perm-plan-content">
+        <pre>{planContent}</pre>
+      </div>
+    </div>
+  );
+}
+
 /** Default tool detail — just show the tool name. */
 function DefaultDetail({ tool }: { tool: string }) {
   return (
@@ -129,6 +153,9 @@ export function permissionSummary(
     }
     return 'Asking a question';
   }
+  if (tool === 'ExitPlanMode') {
+    return 'Review plan';
+  }
   return 'Approve: ' + tool;
 }
 
@@ -149,7 +176,8 @@ export const PermissionPrompt = memo(function PermissionPrompt({
         {tool === 'Bash' && <BashDetail toolInput={toolInput} />}
         {tool === 'Write' && <WriteDetail toolInput={toolInput} />}
         {tool === 'AskUserQuestion' && <AskUserDetail toolInput={toolInput} />}
-        {!['Edit', 'Bash', 'Write', 'AskUserQuestion'].includes(tool) && (
+        {tool === 'ExitPlanMode' && <PlanDetail toolInput={toolInput} />}
+        {!['Edit', 'Bash', 'Write', 'AskUserQuestion', 'ExitPlanMode'].includes(tool) && (
           <DefaultDetail tool={tool} />
         )}
       </div>

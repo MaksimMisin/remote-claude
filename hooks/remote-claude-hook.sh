@@ -107,6 +107,17 @@ case "$EVENT_TYPE" in
     TOOL_INPUT="$(echo "$INPUT" | "$JQ" -c '.tool_input // {}')"
     TRANSCRIPT_PATH="$(echo "$INPUT" | "$JQ" -r '.transcript_path // ""')"
 
+    # For ExitPlanMode, read the most recently modified plan file
+    if [ "$TOOL" = "ExitPlanMode" ]; then
+      PLANS_DIR="$HOME/.claude/plans"
+      if [ -d "$PLANS_DIR" ]; then
+        PLAN_FILE="$(ls -t "$PLANS_DIR"/*.md 2>/dev/null | head -1)"
+        if [ -n "$PLAN_FILE" ] && [ -f "$PLAN_FILE" ]; then
+          TOOL_INPUT="$(echo "$TOOL_INPUT" | "$JQ" -c --rawfile pc "$PLAN_FILE" --arg pf "$PLAN_FILE" '. + {planContent: ($pc | .[:51200]), planFile: $pf}')" || true
+        fi
+      fi
+    fi
+
     # Extract assistant text since last user message (what Claude said before this tool call)
     if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
       RESPONSE="$(tail -30 "$TRANSCRIPT_PATH" | "$JQ" -rs '
@@ -182,8 +193,8 @@ case "$EVENT_TYPE" in
         fi
       fi
 
-      # Extract total token usage from transcript (input + cache + output)
-      TOKEN_SUM="$("$JQ" -r 'select(.type == "assistant") | .message.usage | "\((.input_tokens // 0)) \((.cache_creation_input_tokens // 0)) \((.cache_read_input_tokens // 0)) \((.output_tokens // 0))"' "$TRANSCRIPT_PATH" 2>/dev/null | awk '{i+=$1; cc+=$2; cr+=$3; o+=$4} END {printf "%d", i+cc+cr+o}')" || true
+      # Extract token usage from last assistant message (context window + output = what terminal shows)
+      TOKEN_SUM="$("$JQ" -r 'select(.type == "assistant") | .message.usage | "\((.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0) + (.output_tokens // 0))"' "$TRANSCRIPT_PATH" 2>/dev/null | tail -1)" || true
       if [ -n "$TOKEN_SUM" ] && [ "$TOKEN_SUM" != "0" ]; then
         TOTAL_TOKENS="$TOKEN_SUM"
       fi
@@ -194,6 +205,17 @@ case "$EVENT_TYPE" in
     TOOL="$(echo "$INPUT" | "$JQ" -r '.tool_name // ""')"
     TOOL_INPUT="$(echo "$INPUT" | "$JQ" -c '.tool_input // {}')"
     TRANSCRIPT_PATH="$(echo "$INPUT" | "$JQ" -r '.transcript_path // ""')"
+
+    # For ExitPlanMode, read the most recently modified plan file
+    if [ "$TOOL" = "ExitPlanMode" ]; then
+      PLANS_DIR="$HOME/.claude/plans"
+      if [ -d "$PLANS_DIR" ]; then
+        PLAN_FILE="$(ls -t "$PLANS_DIR"/*.md 2>/dev/null | head -1)"
+        if [ -n "$PLAN_FILE" ] && [ -f "$PLAN_FILE" ]; then
+          TOOL_INPUT="$(echo "$TOOL_INPUT" | "$JQ" -c --rawfile pc "$PLAN_FILE" --arg pf "$PLAN_FILE" '. + {planContent: ($pc | .[:51200]), planFile: $pf}')" || true
+        fi
+      fi
+    fi
 
     # Extract assistant text for context (what Claude said before this notification)
     if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then

@@ -19,6 +19,7 @@ interface SessionListProps {
   onDismiss: (id: string) => void;
   onClose: (id: string) => void;
   onPermissionAction?: (sessionId: string, action: PermissionAction) => void;
+  onRename?: (id: string, name: string) => void;
 }
 
 export function SessionList({
@@ -30,6 +31,7 @@ export function SessionList({
   onDismiss,
   onClose,
   onPermissionAction,
+  onRename,
 }: SessionListProps): React.ReactElement {
   const sorted = Object.values(sessions).sort((a, b) => {
     const oa = STATUS_ORDER[a.status] ?? 9;
@@ -63,6 +65,7 @@ export function SessionList({
             onDismiss={() => onDismiss(selected.id)}
             onClose={() => onClose(selected.id)}
             onPermissionAction={onPermissionAction ? (action) => onPermissionAction(selected.id, action) : undefined}
+            onRename={onRename}
           />
         </div>
       );
@@ -81,6 +84,7 @@ export function SessionList({
           onClick={() => onSelect(s.id)}
           onDismiss={() => onDismiss(s.id)}
           onClose={() => onClose(s.id)}
+          onRename={onRename}
         />
       ))}
     </div>

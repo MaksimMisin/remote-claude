@@ -3,6 +3,7 @@ import type React from 'react';
 import type { ClaudeEvent } from '../types';
 import { formatTime } from '../utils/time';
 import {
+  basename,
   eventDescription,
   toolIcon,
   truncate,
@@ -19,7 +20,7 @@ export function EventFeed({ events }: EventFeedProps): React.ReactElement | null
   const filtered = useMemo(() => {
     return events
       .filter((ev) => {
-        if (ev.type === 'pre_tool_use') return !!ev.assistantText;
+        if (ev.type === 'pre_tool_use') return !!ev.assistantText || hasToolDetail(ev);
         return true;
       })
       .sort((a, b) => b.timestamp - a.timestamp);
@@ -80,8 +81,78 @@ function ExpandableText({ text, className, limit = COLLAPSED_LIMIT }: { text: st
   );
 }
 
+/** Check if an event has expandable tool details. */
+function hasToolDetail(ev: ClaudeEvent): boolean {
+  if (!ev.tool || !ev.toolInput) return false;
+  const t = ev.tool;
+  return t === 'Edit' || t === 'Bash' || t === 'Write' || t === 'ExitPlanMode';
+}
+
+/** Inline tool detail for event items (expandable). */
+function ToolDetail({ tool, toolInput }: { tool: string; toolInput: Record<string, unknown> }) {
+  if (tool === 'Edit') {
+    const filePath = (toolInput.file_path as string) || '';
+    const oldStr = (toolInput.old_string as string) || '';
+    const newStr = (toolInput.new_string as string) || '';
+    const oldLines = oldStr.split('\n').slice(0, 15);
+    const newLines = newStr.split('\n').slice(0, 15);
+    const truncated = oldStr.split('\n').length > 15 || newStr.split('\n').length > 15;
+    return (
+      <div className="event-tool-detail">
+        <div className="etd-file">{basename(filePath)}</div>
+        <div className="etd-diff">
+          {oldLines.map((line, i) => (
+            <div key={`d-${i}`} className="diff-del">- {line}</div>
+          ))}
+          {newLines.map((line, i) => (
+            <div key={`a-${i}`} className="diff-add">+ {line}</div>
+          ))}
+          {truncated && <div className="diff-trunc">... (truncated)</div>}
+        </div>
+      </div>
+    );
+  }
+  if (tool === 'Bash') {
+    const cmd = (toolInput.command as string) || '';
+    const desc = (toolInput.description as string) || '';
+    return (
+      <div className="event-tool-detail">
+        {desc && <div className="etd-desc">{desc}</div>}
+        <pre className="etd-command">$ {truncate(cmd, 800)}</pre>
+      </div>
+    );
+  }
+  if (tool === 'Write') {
+    const filePath = (toolInput.file_path as string) || '';
+    const content = (toolInput.content as string) || '';
+    const lines = content.split('\n');
+    const preview = lines.slice(0, 10).join('\n');
+    const truncated = lines.length > 10;
+    return (
+      <div className="event-tool-detail">
+        <div className="etd-file">{basename(filePath)} ({lines.length} lines)</div>
+        <pre className="etd-command">{preview}{truncated ? '\n... (truncated)' : ''}</pre>
+      </div>
+    );
+  }
+  if (tool === 'ExitPlanMode') {
+    const planContent = (toolInput.planContent as string) || '';
+    const planFile = (toolInput.planFile as string) || '';
+    if (!planContent) return null;
+    return (
+      <div className="event-tool-detail">
+        <div className="etd-file">{planFile.split('/').pop() || 'Plan'}</div>
+        <pre className="etd-plan">{planContent}</pre>
+      </div>
+    );
+  }
+  return null;
+}
+
 function EventItem({ event: ev, showAssistantText }: { event: ClaudeEvent; showAssistantText: boolean }) {
+  const [detailExpanded, setDetailExpanded] = useState(false);
   const hasAssistantMsg = ev.type === 'pre_tool_use' && !!ev.assistantText;
+  const hasDetail = hasToolDetail(ev);
   const icon =
     ev.type === 'stop'
       ? '\u2705'
@@ -101,15 +172,29 @@ function EventItem({ event: ev, showAssistantText }: { event: ClaudeEvent; showA
     ev.type === 'notification' ||
     hasAssistantMsg;
 
+  const handleDescClick = hasDetail ? (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setDetailExpanded(v => !v);
+  } : undefined;
+
   return (
     <div
-      className="event-item"
+      className={`event-item${hasDetail ? ' event-expandable' : ''}`}
       style={isHighlight ? { padding: '8px 0' } : undefined}
     >
       <span className="event-time">{formatTime(ev.timestamp)}</span>
       <span className="event-icon">{icon}</span>
-      <span className="event-desc">
-        {eventDescription(ev)}
+      <span className="event-desc" onClick={handleDescClick}>
+        <span className="event-desc-line">
+          {eventDescription(ev)}
+          {hasDetail && !detailExpanded && <span className="event-expand-arrow"> ▸</span>}
+          {hasDetail && detailExpanded && <span className="event-expand-arrow"> ▾</span>}
+        </span>
+
+        {/* Expandable tool detail */}
+        {detailExpanded && ev.tool && ev.toolInput && (
+          <ToolDetail tool={ev.tool} toolInput={ev.toolInput} />
+        )}
 
         {/* User prompt text */}
         {ev.type === 'user_prompt_submit' && ev.assistantText && (

@@ -1,6 +1,6 @@
 # Design Doc: Exposing Remote Claude on the Internet
 
-**Status:** Approved
+**Status:** Implemented (commit 1c77670)
 **Date:** 2025-02-08
 **Goal:** Access the Remote Claude dashboard from outside the home network at `claude.example.com`
 
@@ -260,3 +260,9 @@ This starts cloudflared on boot automatically.
 3. **Terraform:** Self-contained in this repo's `network/` directory. Duplicates Cloudflare creds in tfvars (acceptable).
 4. **Access policy scope:** Protect everything (`claude.example.com/*`).
 5. **Session duration:** 30 days.
+
+---
+
+## Post-Implementation Note
+
+Deployed as designed. Server binds `0.0.0.0` by default (`BIND_HOST` configurable). CF header check + hook secret on `/event` endpoint. Terraform state in `network/`.

@@ -1,6 +1,21 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import type React from 'react';
 import type { PendingImage, QueuedPrompt, SessionStatus } from '../types';
+
+interface SlashCommand {
+  cmd: string;
+  desc: string;
+  hasArg?: boolean; // if true, leave cursor ready for an argument after selection
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  { cmd: '/compact', desc: 'Compact conversation to free context', hasArg: true },
+  { cmd: '/clear', desc: 'Clear conversation history' },
+  { cmd: '/cost', desc: 'Show token usage and costs' },
+  { cmd: '/model', desc: 'Change AI model' },
+  { cmd: '/context', desc: 'Visualize context window usage' },
+  { cmd: '/help', desc: 'Show all available commands' },
+];
 
 interface InputAreaProps {
   selectedId: string;
@@ -73,16 +88,6 @@ export function InputArea({
     setImages([]);
   }, [text, images, onSend]);
 
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        handleSend();
-      }
-    },
-    [handleSend],
-  );
-
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const files = Array.from(e.target.files || []);
@@ -117,7 +122,6 @@ export function InputArea({
     const queued = onEditQueue();
     if (queued) {
       setText(queued.text);
-      // Convert queued images to PendingImage format (no dataUrl available, leave empty)
       setImages(queued.images.map((img) => ({
         name: img.name,
         dataUrl: `data:${img.mimeType};base64,${img.base64}`,
@@ -127,6 +131,72 @@ export function InputArea({
       setTimeout(() => textInputRef.current?.focus(), 50);
     }
   }, [onEditQueue]);
+
+  // Slash command autocomplete
+  const [slashIndex, setSlashIndex] = useState(-1);
+  const slashMatches = useMemo(() => {
+    const trimmed = text.trimStart();
+    if (!trimmed.startsWith('/')) return [];
+    const firstSpace = trimmed.indexOf(' ');
+    if (firstSpace !== -1) return []; // already typing args, hide suggestions
+    const matches = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(trimmed));
+    // Hide menu when text is an exact match (command fully typed) — let Enter send it
+    if (matches.length === 1 && matches[0].cmd === trimmed) return [];
+    return matches;
+  }, [text]);
+  const showSlash = slashMatches.length > 0;
+
+  useEffect(() => {
+    setSlashIndex(0);
+  }, [slashMatches.length]);
+
+  const pickSlashCommand = useCallback(
+    (cmd: string, hasArg?: boolean) => {
+      setText(cmd + (hasArg ? ' ' : ''));
+      setTimeout(() => textInputRef.current?.focus(), 0);
+    },
+    [],
+  );
+
+  const handleSlashKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!showSlash) return false;
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashIndex((i) => (i <= 0 ? slashMatches.length - 1 : i - 1));
+        return true;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashIndex((i) => (i >= slashMatches.length - 1 ? 0 : i + 1));
+        return true;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.metaKey && !e.ctrlKey)) {
+        e.preventDefault();
+        const match = slashMatches[slashIndex >= 0 ? slashIndex : 0];
+        if (match) pickSlashCommand(match.cmd, match.hasArg);
+        return true;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setText('');
+        return true;
+      }
+      return false;
+    },
+    [showSlash, slashMatches, slashIndex, pickSlashCommand],
+  );
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (handleSlashKeyDown(e)) return;
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        handleSend();
+      }
+    },
+    [handleSend, handleSlashKeyDown],
+  );
 
   const isWorking = sessionStatus === 'working';
   const isQueued = !!queuedPrompt;
@@ -156,6 +226,23 @@ export function InputArea({
                 &times;
               </button>
             </div>
+          ))}
+        </div>
+      )}
+      {showSlash && (
+        <div className="slash-menu">
+          {slashMatches.map((m, i) => (
+            <button
+              key={m.cmd}
+              className={`slash-item${i === slashIndex ? ' slash-item-active' : ''}`}
+              onPointerDown={(e) => {
+                e.preventDefault(); // keep textarea focus
+                pickSlashCommand(m.cmd, m.hasArg);
+              }}
+            >
+              <span className="slash-cmd">{m.cmd}</span>
+              <span className="slash-desc">{m.desc}</span>
+            </button>
           ))}
         </div>
       )}

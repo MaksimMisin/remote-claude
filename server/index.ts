@@ -364,6 +364,15 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         return json(res, { ok: true });
       }
 
+      if (route.action === 'rename' && method === 'POST') {
+        const body = await readBody(req);
+        const { name } = JSON.parse(body) as { name: string };
+        if (name == null) return error(res, 'Missing name');
+        const updated = await sessionManager.rename(route.id, name.trim());
+        if (!updated) return error(res, 'Session not found', 404);
+        return json(res, { ok: true });
+      }
+
       if (route.action === 'dismiss' && method === 'POST') {
         const dismissed = sessionManager.dismiss(route.id);
         if (!dismissed) return error(res, 'Session not found', 404);
