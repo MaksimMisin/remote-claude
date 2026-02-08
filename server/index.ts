@@ -13,6 +13,7 @@ import { SERVER_PORT, DATA_DIR } from '../shared/defaults.js';
 import type { ClaudeEvent, ServerMessage } from '../shared/types.js';
 import { SessionManager } from './SessionManager.js';
 import { EventProcessor } from './EventProcessor.js';
+import { capturePane } from './TmuxController.js';
 import { mkdirSync } from 'node:fs';
 
 const BIND_HOST = process.env.BIND_HOST || '0.0.0.0';
@@ -339,7 +340,69 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
         }
 
         if (!promptText.trim()) return error(res, 'Missing text or image');
+
+        const isSlashCmd = promptText.trim().startsWith('/');
+        const tmuxTarget = session.tmuxTarget;
+
+        // Capture pane before sending (for slash command output diffing)
+        let paneBefore = '';
+        if (isSlashCmd && tmuxTarget) {
+          paneBefore = await capturePane(tmuxTarget);
+        }
+
         await sessionManager.sendPrompt(route.id, promptText);
+
+        // Emit a synthetic prompt event so the dashboard shows it immediately
+        const promptEvent: ClaudeEvent = {
+          id: `web-${Date.now()}-${randomBytes(4).toString('hex')}`,
+          timestamp: Date.now(),
+          type: 'user_prompt_submit',
+          sessionId: session.claudeSessionId || session.id,
+          cwd: session.cwd,
+          assistantText: parsed.text || '',
+          tmuxTarget: session.tmuxTarget,
+        };
+        eventProcessor.ingest(promptEvent);
+
+        // For slash commands: capture pane output after a delay and broadcast it
+        if (isSlashCmd && tmuxTarget) {
+          const sid = session.claudeSessionId || session.id;
+          setTimeout(async () => {
+            try {
+              const paneAfter = await capturePane(tmuxTarget);
+              // Strip ANSI escape codes
+              const strip = (s: string) => s.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
+              const beforeLines = strip(paneBefore).split('\n');
+              const afterLines = strip(paneAfter).split('\n');
+
+              // Find new lines by removing the common prefix
+              let commonPrefix = 0;
+              while (commonPrefix < beforeLines.length && commonPrefix < afterLines.length
+                && beforeLines[commonPrefix] === afterLines[commonPrefix]) {
+                commonPrefix++;
+              }
+              const newLines = afterLines.slice(commonPrefix)
+                .filter(l => l.trim() !== '') // drop empty lines
+                .join('\n').trim();
+
+              if (newLines) {
+                const responseEvent: ClaudeEvent = {
+                  id: `web-resp-${Date.now()}-${randomBytes(4).toString('hex')}`,
+                  timestamp: Date.now(),
+                  type: 'stop',
+                  sessionId: sid,
+                  cwd: session.cwd,
+                  assistantText: newLines,
+                  tmuxTarget,
+                };
+                eventProcessor.ingest(responseEvent);
+              }
+            } catch (err) {
+              console.error('[Server] Failed to capture slash command output:', err);
+            }
+          }, 1500);
+        }
+
         return json(res, { ok: true });
       }
 
