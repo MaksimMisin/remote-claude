@@ -66,8 +66,8 @@ export default function App() {
         // Avoid duplicates
         if (list.some((e) => e.id === ev.id)) return prev;
         let updated = [...list, ev];
-        // Keep last 200 events per session
-        if (updated.length > 200) updated = updated.slice(-200);
+        // Keep last 1000 events per session
+        if (updated.length > 1000) updated = updated.slice(-1000);
         return { ...prev, [sid]: updated };
       });
       // Bulk events don't need immediate re-render triggers
