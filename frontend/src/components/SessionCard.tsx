@@ -185,8 +185,8 @@ export const SessionCard = memo(function SessionCard({
         <div className="card-header">
           <div className={`dot dot-${session.status}`} />
           <div
-            className={`card-name${onRename ? ' card-name-editable' : ''}`}
-            onClick={onRename ? handleRename : undefined}
+            className={`card-name${selected && onRename ? ' card-name-editable' : ''}`}
+            onClick={selected && onRename ? handleRename : undefined}
           >
             {displayName}
             {session.customName && <span className="card-name-custom-indicator" />}

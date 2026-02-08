@@ -123,6 +123,9 @@ readable at arm's length on a phone screen.
 
 **Session Name**: User-assigned label. "Frontend", "Tests", "API Refactor". Bold,
 16px minimum. This is the identifier the user has in their mental model.
+Tapping the name to rename is ONLY available when the session card is expanded
+(selected). On the dashboard list view, tapping the name selects the card instead
+-- rename on the dashboard is a nuisance that interferes with card selection.
 
 **Timestamp**: Relative time since last activity. "just now", "2m ago", "15m ago".
 Updates live.
