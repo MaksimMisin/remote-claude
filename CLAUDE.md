@@ -64,7 +64,7 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - Long-press bell icon to fire a test notification
 - Frontend is now a React/Vite app in `frontend/` (replaces old single-file HTML)
 - `public/index.html` is a built artifact from the React frontend
-- Prompt queue: when a session is working, new prompts are queued client-side and auto-sent on idle
+- Multi-item prompt queue: when a session is working, new prompts are appended to a per-session queue (array) and auto-sent sequentially on each working→idle transition
 - Create session modal has checkbox toggles for common flags (--dangerously-skip-permissions, --chrome)
 - Permission request data falls back to preceding pre_tool_use event when notification lacks tool info
 

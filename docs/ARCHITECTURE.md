@@ -208,7 +208,7 @@ React/Vite app in `frontend/`, built to `public/` as static assets. Mobile-first
 - **Vibration** on mobile for attention-needed events
 - **Bell button** to cycle notification modes; long-press to test
 - **Image upload** support in prompts (single or multiple, saved to server)
-- **Prompt queue**: prompts sent while session is working are queued and auto-sent on idle
+- **Multi-item prompt queue**: prompts sent while session is working are appended to a per-session queue and auto-sent sequentially on each working→idle transition; queue UI shows numbered items with individual remove, clear all, and edit last
 - **Session rename** by tapping name on selected (expanded) card
 - **Swipe confirmation dialogs** on swipe-to-close and swipe-to-dismiss
 - **Slash command output capture** via tmux pane diffing
