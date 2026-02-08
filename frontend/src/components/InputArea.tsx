@@ -20,20 +20,20 @@ const SLASH_COMMANDS: SlashCommand[] = [
 interface InputAreaProps {
   selectedId: string;
   sessionStatus?: SessionStatus;
-  queuedPrompt: QueuedPrompt | null;
+  promptQueue: QueuedPrompt[] | null;
   onSend: (
     text: string,
     images: { name: string; base64: string; mimeType: string }[],
   ) => void;
   onCancel: () => void;
-  onCancelQueue: () => void;
+  onCancelQueue: (index?: number) => void;
   onEditQueue: () => QueuedPrompt | undefined;
 }
 
 export function InputArea({
   selectedId,
   sessionStatus,
-  queuedPrompt,
+  promptQueue,
   onSend,
   onCancel,
   onCancelQueue,
@@ -199,21 +199,33 @@ export function InputArea({
   );
 
   const isWorking = sessionStatus === 'working';
-  const isQueued = !!queuedPrompt;
+  const hasQueue = !!promptQueue && promptQueue.length > 0;
+  const queueLen = promptQueue?.length || 0;
 
   return (
     <div id="input-area" className="visible" ref={inputAreaRef}>
-      {isQueued && (
-        <div className="queue-banner">
-          <span className="queue-banner-text">
-            Queued: &ldquo;{queuedPrompt!.text.slice(0, 60)}{queuedPrompt!.text.length > 60 ? '...' : ''}&rdquo;
-            {queuedPrompt!.images.length > 0 && (
-              <span className="queue-badge-images"> (+ {queuedPrompt!.images.length} image{queuedPrompt!.images.length > 1 ? 's' : ''})</span>
+      {hasQueue && (
+        <div className="queue-list">
+          <div className="queue-list-header">
+            <span className="queue-list-title">Queue ({queueLen})</span>
+            {queueLen > 1 && (
+              <button className="queue-banner-btn" onClick={() => onCancelQueue(-1)}>Clear all</button>
             )}
-          </span>
-          <div className="queue-banner-actions">
-            <button className="queue-banner-btn" onClick={handleEditQueueClick}>Edit</button>
-            <button className="queue-banner-btn" onClick={onCancelQueue}>Cancel</button>
+          </div>
+          {promptQueue!.map((q, i) => (
+            <div className="queue-item" key={i}>
+              <span className="queue-item-num">{i + 1}</span>
+              <span className="queue-item-text">
+                {q.text.slice(0, 80)}{q.text.length > 80 ? '...' : ''}
+                {q.images.length > 0 && (
+                  <span className="queue-badge-images"> (+{q.images.length} img)</span>
+                )}
+              </span>
+              <button className="queue-item-x" onClick={() => onCancelQueue(i)}>&times;</button>
+            </div>
+          ))}
+          <div className="queue-list-footer">
+            <button className="queue-banner-btn" onClick={handleEditQueueClick}>Edit last</button>
           </div>
         </div>
       )}
@@ -249,7 +261,7 @@ export function InputArea({
       <div id="input-text-row">
         <textarea
           ref={textInputRef}
-          placeholder={isWorking && !isQueued ? 'Queue next instruction...' : 'Send a message...'}
+          placeholder={isWorking ? `Add to queue${hasQueue ? ` (${queueLen} pending)` : ''}...` : 'Send a message...'}
           rows={2}
           value={text}
           onChange={(e) => setText(e.target.value)}

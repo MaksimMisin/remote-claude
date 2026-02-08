@@ -15,7 +15,7 @@ export class EventProcessor {
   private fileOffset = 0;
   private onEvent: (event: ClaudeEvent) => void;
 
-  private static readonly MAX_PER_SESSION = 100;
+  private static readonly MAX_PER_SESSION = 500;
 
   constructor(onEvent: (event: ClaudeEvent) => void) {
     this.onEvent = onEvent;
