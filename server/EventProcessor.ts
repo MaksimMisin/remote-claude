@@ -26,6 +26,28 @@ export class EventProcessor {
     return sessionId.slice(0, 8);
   }
 
+  /** Store an event without broadcasting (used for loading history on startup). */
+  private ingestSilent(event: ClaudeEvent): void {
+    if (this.seenIds.has(event.id)) return;
+    this.seenIds.add(event.id);
+
+    if (!event.marker && event.assistantText) {
+      const marker = parseMarker(event.assistantText);
+      if (marker) event.marker = marker;
+    }
+
+    const sid = this.shortId(event.sessionId);
+    let bucket = this.sessionEvents.get(sid);
+    if (!bucket) {
+      bucket = [];
+      this.sessionEvents.set(sid, bucket);
+    }
+    bucket.push(event);
+    if (bucket.length > EventProcessor.MAX_PER_SESSION) {
+      bucket.shift();
+    }
+  }
+
   /** Process an incoming event (from HTTP POST). Returns true if new. */
   ingest(event: ClaudeEvent): boolean {
     if (this.seenIds.has(event.id)) return false;
@@ -85,11 +107,23 @@ export class EventProcessor {
 
   /** Start watching the JSONL events file for crash recovery. */
   startFileWatch(): void {
-    // Seed the offset to end of current file so we don't replay old events
+    // Load recent events from file so history survives server restarts
     if (existsSync(EVENTS_FILE)) {
       try {
         const content = readFileSync(EVENTS_FILE, 'utf-8');
         this.fileOffset = content.length;
+        // Parse the last ~500 lines to seed history
+        const lines = content.trimEnd().split('\n');
+        const tail = lines.slice(-500);
+        for (const line of tail) {
+          try {
+            const event = JSON.parse(line) as ClaudeEvent;
+            if (event.id) this.ingestSilent(event);
+          } catch {
+            // Skip malformed lines
+          }
+        }
+        console.log(`[EventProcessor] Loaded ${this.getEventCount()} events from file`);
       } catch {}
     }
 

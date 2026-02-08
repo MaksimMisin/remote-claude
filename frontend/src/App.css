@@ -99,6 +99,12 @@ header h1 {
   font-weight: 700;
 }
 
+.header-logo {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  padding: 4px 0;
+}
+
 .header-right {
   display: flex;
   align-items: center;
@@ -253,6 +259,10 @@ header h1 {
   background: var(--red);
 }
 
+.card.card-offline {
+  opacity: 0.45;
+}
+
 .card.selected {
   border-left-color: var(--blue);
 }
@@ -353,6 +363,14 @@ header h1 {
   text-overflow: ellipsis;
 }
 
+.card-context-expanded {
+  display: block;
+  -webkit-line-clamp: unset;
+  max-height: 50vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
 .card-waiting .card-context {
   background: #3D3520;
   border: 1px solid #5A4A20;
@@ -426,6 +444,25 @@ header h1 {
   color: #D1D1D6;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.event-assistant.expanded,
+.event-prompt.expanded {
+  max-height: 60vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.event-assistant.collapsed,
+.event-prompt.collapsed {
+  cursor: pointer;
+}
+
+.expand-hint {
+  font-size: 11px;
+  color: var(--blue);
+  margin-top: 4px;
+  text-align: right;
 }
 
 .event-prompt {

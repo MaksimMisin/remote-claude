@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type React from 'react';
 import type { ClaudeEvent } from '../types';
 import { formatTime } from '../utils/time';
@@ -8,6 +8,8 @@ import {
   truncate,
   stripMarkers,
 } from '../utils/events';
+
+const COLLAPSED_LIMIT = 500;
 
 interface EventFeedProps {
   events: ClaudeEvent[];
@@ -59,6 +61,25 @@ export function EventFeed({ events }: EventFeedProps): React.ReactElement | null
   );
 }
 
+function ExpandableText({ text, className, limit = COLLAPSED_LIMIT }: { text: string; className: string; limit?: number }) {
+  const [expanded, setExpanded] = useState(false);
+  const isLong = text.length > limit;
+
+  if (!isLong) {
+    return <div className={className}>{text}</div>;
+  }
+
+  return (
+    <div
+      className={`${className}${expanded ? ' expanded' : ' collapsed'}`}
+      onClick={(e) => { e.stopPropagation(); setExpanded(!expanded); }}
+    >
+      {expanded ? text : truncate(text, limit)}
+      <div className="expand-hint">{expanded ? 'Tap to collapse' : 'Tap to expand'}</div>
+    </div>
+  );
+}
+
 function EventItem({ event: ev, showAssistantText }: { event: ClaudeEvent; showAssistantText: boolean }) {
   const hasAssistantMsg = ev.type === 'pre_tool_use' && !!ev.assistantText;
   const icon =
@@ -92,18 +113,14 @@ function EventItem({ event: ev, showAssistantText }: { event: ClaudeEvent; showA
 
         {/* User prompt text */}
         {ev.type === 'user_prompt_submit' && ev.assistantText && (
-          <div className="event-prompt">
-            {truncate(ev.assistantText, 300)}
-          </div>
+          <ExpandableText text={ev.assistantText} className="event-prompt" limit={300} />
         )}
 
         {/* Claude response on stop */}
         {ev.type === 'stop' && ev.assistantText && (() => {
           const cleanText = stripMarkers(ev.assistantText);
           return cleanText ? (
-            <div className="event-assistant">
-              {truncate(cleanText, 500)}
-            </div>
+            <ExpandableText text={cleanText} className="event-assistant" />
           ) : null;
         })()}
 
@@ -111,9 +128,7 @@ function EventItem({ event: ev, showAssistantText }: { event: ClaudeEvent; showA
         {showAssistantText && ev.assistantText && (() => {
           const cleanText = stripMarkers(ev.assistantText);
           return cleanText ? (
-            <div className="event-assistant">
-              {truncate(cleanText, 500)}
-            </div>
+            <ExpandableText text={cleanText} className="event-assistant" />
           ) : null;
         })()}
 
