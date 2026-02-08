@@ -25,7 +25,7 @@ Server (Node.js + TypeScript, port 4080)
     | 2. SessionManager auto-discovers session or updates existing
     | 3. Broadcasts via WebSocket to all connected clients
     v
-Mobile Web Dashboard (plain HTML/CSS/JS)
+Mobile Web Dashboard (React + Vite)
     |
     | Displays session cards, event feeds, status indicators
     | Sends prompts via POST /api/sessions/:id/prompt
@@ -44,7 +44,7 @@ Server delivers prompt to tmux pane via load-buffer/paste-buffer
 
 4. **Dual delivery** (file + HTTP) -- Hook writes to JSONL file AND posts to server. File provides crash recovery (server watches with chokidar); HTTP provides low-latency delivery. Server deduplicates via event IDs.
 
-5. **Single-file frontend** -- Plain HTML with inline CSS/JS. No build step, no framework, no dependencies. Served as a static file by the server.
+5. **React + Vite frontend** -- Component-based React app in `frontend/`, built to `public/` as static assets. Mobile-first dark theme with hooks-based state management.
 
 6. **Web Notifications + Audio** -- Uses browser Notification API for push alerts and Web Audio API for sound alerts. Works when phone screen is off. No service worker needed for basic notifications.
 
@@ -94,14 +94,18 @@ HTTP server on `0.0.0.0:4080` with routes:
 | GET | `/health` | Server health + stats |
 | GET | `/api/sessions` | List all tracked sessions |
 | GET | `/api/debug` | Debug info (sessions, events, uptime) |
+| GET | `/api/directories?prefix=` | List subdirectories (for session creation) |
+| GET | `/api/recent-dirs` | Recent working directories from sessions |
 | POST | `/api/sessions` | Create managed tmux session |
-| POST | `/api/sessions/:id/prompt` | Send prompt to session's tmux pane |
+| POST | `/api/sessions/:id/prompt` | Send prompt (text + optional images) |
 | POST | `/api/sessions/:id/cancel` | Send Ctrl+C to session |
 | POST | `/api/sessions/:id/keys` | Send tmux keys (Enter, Escape, BTab, etc.) |
+| POST | `/api/sessions/:id/dismiss` | Dismiss session from dashboard |
+| POST | `/api/sessions/:id/close` | Close session (kill tmux window + remove) |
 | DELETE | `/api/sessions/:id` | Kill session's tmux window |
-| POST | `/event` | Ingest hook event |
+| POST | `/event` | Ingest hook event (localhost only) |
 
-WebSocket on `/ws` upgrade. On connect, sends: `connected`, `sessions`, per-session `history` (last 50 events per session). Streams `event`, `session_update`, `marker` messages in real-time.
+WebSocket on `/ws` upgrade. On connect, sends: `connected`, `sessions`, per-session `history` (last 50 events per session). Streams `event`, `session_update`, `marker`, `session_removed` messages in real-time.
 
 Static file serving from `public/` directory.
 
@@ -135,7 +139,7 @@ Static file serving from `public/` directory.
 
 ### 3.3 EventProcessor.ts -- Event Ingestion
 
-- **Per-session** in-memory event store (max 100 events per session) -- prevents one active session from evicting another's history
+- **Per-session** in-memory event store (max 200 events per session) -- prevents one active session from evicting another's history
 - Deduplication via Set of event IDs
 - Parses rc markers from `assistantText` if not already set
 - Watches JSONL file with chokidar for crash recovery (reads new lines from offset)
@@ -218,8 +222,16 @@ interface ManagedSession {
   lastActivity: number;
   cwd: string;
   currentTool?: string;
+  currentToolInput?: Record<string, unknown>;
   claudeSessionId?: string;
   lastMarker?: RcMarker;
+  lastAssistantText?: string;
+  permissionRequest?: { tool: string; toolInput: Record<string, unknown> };
+  windowName?: string;     // For managed sessions
+  flags?: string;          // CLI flags (e.g. "--dangerously-skip-permissions")
+  gitBranch?: string;      // Current git branch from hook events
+  gitDirty?: boolean;      // Whether working tree has uncommitted changes
+  totalTokens?: number;    // Cumulative token usage
 }
 ```
 
@@ -239,6 +251,9 @@ interface ClaudeEvent {
   assistantText?: string;  // Last ~200 chars of assistant response (stop events)
   marker?: RcMarker;       // Parsed rc marker
   tmuxTarget?: string;     // "session:window.pane"
+  gitBranch?: string;      // Current git branch
+  gitDirty?: boolean;      // Uncommitted changes
+  totalTokens?: number;    // Cumulative token usage
 }
 ```
 
@@ -254,18 +269,23 @@ interface ClaudeEvent {
 5. Prints server URL and LAN access URL with token
 
 ### Security
-- **LAN-only by default** -- Server on 0.0.0.0:4080
-- **Tailscale recommended** for remote access
+- **Cloudflare Tunnel + Access** -- Internet access via `claude.maksim.xyz` with GitHub OAuth (see `docs/INTERNET-EXPOSURE.md`)
+- **`/event` endpoint protection** -- Blocks requests with `CF-Connecting-IP` header (Cloudflare tunnel traffic) + validates `X-Hook-Secret` header (defense in depth)
+- **Bind address** -- `0.0.0.0:4080` by default, configurable via `BIND_HOST` env var
 - **Prompt injection safe** -- tmux load-buffer/paste-buffer avoids shell interpretation
 - **Target validation** -- Regex check on all tmux targets
-- **1MB body limit** on HTTP requests
-- **CORS** -- Allow-Origin: *
+- **10MB body limit** on HTTP requests (supports image uploads)
+- **CORS** -- Configurable via `CORS_ORIGIN` env var (defaults to `*` for LAN, set to domain for internet)
+- **Security headers** -- `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: same-origin`
 
 ---
 
 ## 7. What's Not Built Yet
-- Voice/TTS (Web Speech API) -- deferred from MVP
-- Service Worker for offline + background push notifications
-- Auth token validation on API routes
-- QR code display for mobile setup
+
+See `docs/ROADMAP.md` for the full list. Key gaps:
+
+- Voice/TTS (Web Speech API)
+- Service Worker for background push notifications
+- Notification priority tiers (P0-P3)
+- Session detail view with full history
 - Multi-user support

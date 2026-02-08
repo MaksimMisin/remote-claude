@@ -343,6 +343,17 @@ export default function App() {
     apiPost('/api/sessions/' + id + '/dismiss', {});
   }, []);
 
+  // Rename session
+  const handleRename = useCallback((id: string, name: string) => {
+    apiPost('/api/sessions/' + id + '/rename', { name });
+    // Optimistic update
+    setSessions((prev) => {
+      const session = prev[id];
+      if (!session) return prev;
+      return { ...prev, [id]: { ...session, customName: name || undefined } };
+    });
+  }, []);
+
   // Close (kill tmux window + remove)
   const handleClose = useCallback((id: string) => {
     const session = sessionsRef.current[id];
@@ -411,8 +422,9 @@ export default function App() {
         connected={connected}
         reconnecting={reconnecting}
         version={version}
-        notificationsEnabled={notifications.enabled}
+        notificationMode={notifications.mode}
         onToggleNotifications={notifications.toggle}
+        onTestNotification={() => notifications.notify('Test Notification', 'If you see this, notifications work!', true, true)}
         onNewSession={() => setModalOpen(true)}
         onGoHome={() => handleSelect(null)}
       />
@@ -429,6 +441,7 @@ export default function App() {
           onDismiss={handleDismiss}
           onClose={handleClose}
           onPermissionAction={handlePermissionAction}
+          onRename={handleRename}
         />
         {selectedId && <EventFeed events={selectedEvents} />}
       </div>

@@ -13,6 +13,7 @@ interface SessionCardProps {
   onDismiss: () => void;
   onClose: () => void;
   onPermissionAction?: (action: PermissionAction) => void;
+  onRename?: (id: string, name: string) => void;
 }
 
 /** Strip leading emoji prefix (e.g. "fix auth" -> "fix auth") set by tmux-title hook */
@@ -52,6 +53,7 @@ export const SessionCard = memo(function SessionCard({
   onDismiss,
   onClose,
   onPermissionAction,
+  onRename,
 }: SessionCardProps) {
   const isWaiting = session.status === 'waiting';
   const showContext = needsContext(session);
@@ -60,10 +62,20 @@ export const SessionCard = memo(function SessionCard({
   if (isWaiting && !selected) className += ' card-waiting';
   if (session.status === 'offline') className += ' card-offline';
 
-  // Prefer tmux window name (LLM-generated or human-overridden) over auto-discovered name
-  const displayName = session.windowName
-    ? stripEmojiPrefix(session.windowName)
-    : session.name || session.id;
+  // Priority: manual override > tmux window name > auto-discovered name > id
+  const displayName = session.customName
+    ? session.customName
+    : session.windowName
+      ? stripEmojiPrefix(session.windowName)
+      : session.name || session.id;
+
+  const handleRename = useCallback((e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!onRename) return;
+    const newName = prompt('Rename session:', displayName);
+    if (newName === null) return; // cancelled
+    onRename(session.id, newName.trim());
+  }, [onRename, session.id, displayName]);
 
   const hasPerm = isWaiting && !!session.permissionRequest;
 
@@ -172,7 +184,13 @@ export const SessionCard = memo(function SessionCard({
       >
         <div className="card-header">
           <div className={`dot dot-${session.status}`} />
-          <div className="card-name">{displayName}</div>
+          <div
+            className={`card-name${onRename ? ' card-name-editable' : ''}`}
+            onClick={onRename ? handleRename : undefined}
+          >
+            {displayName}
+            {session.customName && <span className="card-name-custom-indicator" />}
+          </div>
           <div className={`card-header-actions${selected ? ' always-visible' : ''}`}>
             <button
               className="card-header-btn card-btn-hide"

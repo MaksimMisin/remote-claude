@@ -140,6 +140,14 @@ export async function getWindowName(target: string): Promise<string> {
   }
 }
 
+export async function renameWindow(target: string, newName: string): Promise<void> {
+  validateTarget(target);
+  if (!newName || /[;&|`$(){}!<>]/.test(newName)) {
+    throw new Error(`Invalid window name: ${newName}`);
+  }
+  await execFileAsync('tmux', ['rename-window', '-t', target, newName]);
+}
+
 export async function killWindow(target: string): Promise<void> {
   validateTarget(target);
   await execFileAsync('tmux', ['kill-window', '-t', target]);

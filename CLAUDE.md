@@ -9,7 +9,8 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - `public/` -- Built frontend assets (served as static files)
 - `shared/` -- Shared TypeScript types and config constants
 - `bin/` -- CLI setup tool
-- `docs/` -- Design and architecture documents
+- `docs/` -- Architecture, design, and roadmap
+- `docs/archive/` -- Pre-implementation planning docs (historical)
 
 ## Key Files
 - `server/index.ts` -- HTTP routes, WebSocket, static serving
@@ -45,7 +46,9 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - Each event includes `tmuxTarget` (e.g. `Personal:3.0`) for precise pane targeting
 - No `rc-` prefix convention -- works with any existing tmux setup
 - Manually created sessions share a single `remote-claude` tmux session with named windows
-- Web Notifications API + Web Audio API for alerts (no service worker yet)
+- Service worker (`public/sw.js`) for notifications — required on Android Chrome where `new Notification()` doesn't work
+- Notification modes cycle: off → silent → vibrate → full (persisted in localStorage)
+- Long-press bell icon to fire a test notification
 - Frontend is now a React/Vite app in `frontend/` (replaces old single-file HTML)
 - `public/index.html` is a built artifact from the React frontend
 - Prompt queue: when a session is working, new prompts are queued client-side and auto-sent on idle

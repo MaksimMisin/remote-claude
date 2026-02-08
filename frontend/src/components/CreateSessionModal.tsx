@@ -58,6 +58,7 @@ export function CreateSessionModal({
       setDirSuggestions([]);
       setShowSuggestions(false);
       setNameManuallyEdited(false);
+      setCreating(false);
     }
   }, [open]);
 
@@ -135,7 +136,9 @@ export function CreateSessionModal({
     [sessions],
   );
 
-  const handleCreate = useCallback(() => {
+  const [creating, setCreating] = useState(false);
+
+  const handleCreate = useCallback(async () => {
     const finalName = name.trim();
     if (!finalName) return;
     const finalCwd = cwd.trim() || undefined;
@@ -151,7 +154,12 @@ export function CreateSessionModal({
         finalFlags = finalFlags ? finalFlags + ' --chrome' : '--chrome';
       }
     }
-    onCreate(finalName, finalCwd || '', finalFlags || undefined);
+    setCreating(true);
+    try {
+      await onCreate(finalName, finalCwd || '', finalFlags || undefined);
+    } finally {
+      setCreating(false);
+    }
     onClose();
   }, [name, cwd, flags, skipPermissions, useChrome, onCreate, onClose]);
 
@@ -296,10 +304,11 @@ export function CreateSessionModal({
             Cancel
           </button>
           <button
-            style={{ background: 'var(--blue)', color: '#fff' }}
+            style={{ background: 'var(--blue)', color: '#fff', opacity: creating ? 0.6 : 1 }}
             onClick={handleCreate}
+            disabled={creating}
           >
-            Create
+            {creating ? 'Creating...' : 'Create'}
           </button>
         </div>
       </div>

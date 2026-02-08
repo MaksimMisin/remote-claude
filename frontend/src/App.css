@@ -219,22 +219,22 @@ header h1 {
   flex-shrink: 0;
 }
 
-/* Show on hover (desktop with pointer) */
-@media (hover: hover) {
+/* Show on hover (desktop with fine pointer only) */
+@media (hover: hover) and (pointer: fine) {
   .card:hover .card-header-actions {
     display: flex;
   }
 }
 
-/* Always show when selected (desktop) */
-@media (hover: hover) {
+/* Always show when selected (desktop with fine pointer only) */
+@media (hover: hover) and (pointer: fine) {
   .card-header-actions.always-visible {
     display: flex;
   }
 }
 
 /* Hide buttons entirely on touch devices (swipe replaces them) */
-@media (hover: none) {
+@media (hover: none), (pointer: coarse) {
   .card-header-actions,
   .card-header-actions.always-visible {
     display: none !important;
@@ -281,6 +281,27 @@ header h1 {
   font-size: 16px;
   font-weight: 600;
   flex: 1;
+}
+
+.card-name-editable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 0 4px;
+  margin: 0 -4px;
+}
+
+.card-name-editable:active {
+  background: rgba(255,255,255,0.08);
+}
+
+.card-name-custom-indicator {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  background: var(--blue);
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
 }
 
 .card-time {
@@ -485,6 +506,70 @@ header h1 {
   color: var(--amber);
 }
 
+/* --- Event: expandable tool detail --- */
+
+.event-expandable {
+  cursor: pointer;
+}
+
+.event-desc-line {
+  display: inline;
+}
+
+.event-expand-arrow {
+  color: var(--text2);
+  font-size: 11px;
+}
+
+.event-tool-detail {
+  margin-top: 6px;
+  padding: 8px;
+  background: #1A1A1C;
+  border-radius: 6px;
+  font-size: 12px;
+  max-height: 50vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.etd-file {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 12px;
+  color: var(--blue);
+  margin-bottom: 6px;
+}
+
+.etd-desc {
+  color: #D1D1D6;
+  margin-bottom: 4px;
+}
+
+.etd-diff {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.etd-command {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #D1D1D6;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0;
+}
+
+.etd-plan {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #D1D1D6;
+  margin: 0;
+}
+
 /* --- Input Area --- */
 
 #input-area {
@@ -627,6 +712,49 @@ header h1 {
 .btn-cancel {
   background: #3A3A3C;
   color: var(--red);
+}
+
+/* --- Slash Command Menu --- */
+
+.slash-menu {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 10px;
+  gap: 2px;
+}
+
+.slash-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: #fff;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.slash-item-active {
+  background: #3A3A3C;
+}
+
+.slash-cmd {
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-weight: 600;
+  color: var(--blue);
+  flex-shrink: 0;
+}
+
+.slash-desc {
+  color: var(--text2);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* --- Queue Banner --- */
@@ -975,6 +1103,26 @@ header h1 {
 .perm-tool-name {
   color: var(--text2);
   font-size: 13px;
+}
+
+.perm-plan-content {
+  max-height: 60vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #1A1A1C;
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 8px;
+}
+
+.perm-plan-content pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #D1D1D6;
+  margin: 0;
 }
 
 .perm-actions {

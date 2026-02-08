@@ -131,6 +131,28 @@ export class SessionManager {
     return session;
   }
 
+  /** Rename a session (manual override). Empty name clears override. */
+  async rename(id: string, customName: string): Promise<ManagedSession | undefined> {
+    const session = this.sessions.get(id);
+    if (!session) return undefined;
+    if (customName) {
+      session.customName = customName;
+      // Also rename the tmux window to keep things in sync
+      if (session.tmuxTarget) {
+        try {
+          await tmux.renameWindow(session.tmuxTarget, customName);
+        } catch {
+          // Non-fatal — the customName still takes display priority
+        }
+      }
+    } else {
+      delete session.customName;
+    }
+    this.save();
+    this.onSessionUpdate(session);
+    return session;
+  }
+
   /** Delete a session, kill its tmux window. */
   async remove(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
@@ -309,6 +331,13 @@ export class SessionManager {
         }
         break;
       case 'notification': {
+        // Only process notifications if Claude is actively working.
+        // Late/spurious notifications for idle (finished) or offline sessions
+        // are ignored to prevent false "needs input" alarms.
+        if (prevStatus === 'idle' || prevStatus === 'offline') {
+          console.log(`[SessionManager] Ignoring stale notification for ${session.id} (status=${prevStatus})`);
+          break;
+        }
         session.status = 'waiting';
         // Store structured permission request data for rich UI rendering.
         // Claude Code's Notification hook does NOT include tool_name/tool_input,

@@ -19,6 +19,33 @@ for visual monitoring.
 
 ---
 
+## Implementation Status
+
+This document is the design north star. Not everything is built yet.
+
+| Section | Status | Notes |
+|---------|--------|-------|
+| Information Architecture | Partial | Single-page dashboard, no tab bar or URL routing |
+| Session Card Design | Implemented | Cards, state dots, priority ordering, swipe close/dismiss |
+| Notification UX | Partial | Service worker notifications (Android+desktop), 4-mode cycle (off/silent/vibrate/full), no P0-P3 tiers or grouping |
+| Quick-Action Flows | Partial | Permission UI inline on cards, not bottom sheet overlay |
+| Voice Interaction | Not started | No TTS or STT |
+| Gesture Shortcuts | Partial | Swipe on cards for close/dismiss, no swipe-to-approve |
+| State Machine | Implemented | 4 states (idle/working/waiting/offline) |
+| Progressive Disclosure | Partial | Glance + interact tiers, no deep dive view |
+| Mobile-Specific | Partial | Dark theme, thumb zone, PWA manifest. No Live Activity |
+| Accessibility | Partial | Touch targets, reduced motion. No ARIA audit |
+| Performance Budgets | Not measured | No formal testing |
+| Technology | Diverged | React (not Preact), hooks-based state (not Zustand) |
+
+Features added beyond this design: image uploads, session creation modal with flag
+toggles, git branch/dirty tracking, token counting, prompt queueing, Cloudflare
+Tunnel internet exposure, session dismiss/close, service worker for Android
+notifications, 4-mode notification cycle (off/silent/vibrate/full) with localStorage
+persistence, long-press bell icon to test notifications.
+
+---
+
 ## 1. Information Architecture
 
 ### Screen Hierarchy
@@ -900,6 +927,12 @@ Action buttons: 36px height, 12px padding horizontal, 8px gap
 
 Swipe threshold: 80px horizontal for action trigger
 Swipe visual: Color reveal behind card (green right = approve, gray left = dismiss)
+
+IMPORTANT: On mobile/touch devices, Hide and Close buttons are HIDDEN.
+Swipe gestures are the ONLY way to dismiss/close cards on mobile.
+Buttons are only shown on desktop (hover:hover + pointer:fine).
+Detection uses both (hover: none) and (pointer: coarse) media queries
+to reliably catch all touch-primary devices including Android Chrome.
 ```
 
 ### 9c. Quick Action Overlay (Component Detail)
