@@ -83,13 +83,13 @@ export const SessionCard = memo(function SessionCard({
         <div className={`card-header-actions${selected ? ' always-visible' : ''}`}>
           <button
             className="card-header-btn card-btn-hide"
-            onClick={(e) => { e.stopPropagation(); onDismiss(); }}
+            onClick={(e) => { e.stopPropagation(); if (confirm('Hide this session?')) onDismiss(); }}
           >
             Hide
           </button>
           <button
             className="card-header-btn card-btn-close"
-            onClick={(e) => { e.stopPropagation(); onClose(); }}
+            onClick={(e) => { e.stopPropagation(); if (confirm('Close and kill this session?')) onClose(); }}
           >
             Close
           </button>
