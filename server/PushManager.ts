@@ -60,13 +60,17 @@ export class PushManager {
 
   async sendToAll(payload: PushPayload): Promise<void> {
     if (this.subscriptions.length === 0) return;
+    console.log(`[Push] Sending to ${this.subscriptions.length} subscribers: ${payload.title}`);
     const data = JSON.stringify(payload);
     const stale: string[] = [];
 
     await Promise.allSettled(
       this.subscriptions.map(async (sub) => {
         try {
-          await webpush.sendNotification(sub, data);
+          await webpush.sendNotification(sub, data, {
+            urgency: payload.urgent ? 'high' : 'normal',
+            TTL: 3600,
+          });
         } catch (err: unknown) {
           const statusCode = (err as { statusCode?: number }).statusCode;
           if (statusCode === 410 || statusCode === 404) {
