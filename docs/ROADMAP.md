@@ -37,26 +37,10 @@ OpenClaw (chose Telegram as primary channel with multi-channel adapter arch).
 
 **Non-goals (v1):** Multi-user auth, image upload via Telegram, session creation.
 
-## Near-Term
-- Notification priority tiers (P0-P3) with distinct sounds
-- Swipe-to-approve on permission cards (currently swipe = close/dismiss)
-- Session detail view with full history
-
-## Medium-Term
-- Bottom tab navigation (Sessions / Activity / Settings)
-- Activity tab (cross-session feed)
-- Settings screen
-- Quick Action Overlay (bottom sheet)
-- Notification grouping
-
 ## Long-Term / Aspirational
 - Voice: TTS status announcements (Web Speech API)
 - Voice: STT for hands-free input
-- iOS Live Activity / Dynamic Island
 - PWA enhancements (Badge, Wake Lock, MediaSession)
-- Accessibility audit
-- Multi-user support
-- Multi-channel adapter architecture (Discord, ntfy.sh, etc.)
 
 ## Decided Against
 - Preact (chose React), Zustand (hooks sufficient)
