@@ -67,6 +67,8 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - Multi-item prompt queue: when a session is working, new prompts are appended to a per-session queue (array) and auto-sent sequentially on each working→idle transition
 - Create session modal has checkbox toggles for common flags (--dangerously-skip-permissions, --chrome)
 - Permission request data falls back to preceding pre_tool_use event when notification lacks tool info
+- Claude Code Notification hook has types: `idle_prompt`, `permission_prompt`, `auth_success`, `elicitation_dialog` (via `notification_type` field in stdin JSON)
+- `idle_prompt` fires exactly 60s after Stop -- this is Claude Code core behavior, not a Remote Claude bug. Hook currently doesn't extract `notification_type` to differentiate these
 
 ## Parallel Agent Notes
 - When multiple agents edit this codebase, re-read files before editing (another agent may have changed them)
