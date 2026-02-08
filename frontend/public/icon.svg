@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="108" fill="#1C1C1E"/>
+  <!-- Terminal prompt chevron -->
+  <polyline points="128,176 248,256 128,336" stroke="#FFD60A" stroke-width="44" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Signal wave 1 (close) -->
+  <path d="M296,206 Q348,256 296,306" stroke="#FFD60A" stroke-width="36" stroke-linecap="round" fill="none" opacity="0.85"/>
+  <!-- Signal wave 2 (far) -->
+  <path d="M348,166 Q420,256 348,346" stroke="#FFD60A" stroke-width="32" stroke-linecap="round" fill="none" opacity="0.45"/>
+</svg>
