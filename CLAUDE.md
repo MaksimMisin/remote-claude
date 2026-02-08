@@ -18,6 +18,7 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - `server/EventProcessor.ts` -- Event ingestion, dedup, JSONL file watching
 - `server/TmuxController.ts` -- Safe tmux wrappers (load-buffer/paste-buffer, send-keys)
 - `server/MarkerParser.ts` -- rc marker regex parser
+- `server/PushManager.ts` -- Web Push subscription management and delivery
 - `hooks/remote-claude-hook.sh` -- Reads hook JSON from stdin, posts events to server
 - `frontend/src/App.tsx` -- Main React app component
 - `frontend/src/components/` -- React UI components (SessionCard, InputArea, PermissionPrompt, etc.)
@@ -53,8 +54,13 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - Each event includes `tmuxTarget` (e.g. `Personal:3.0`) for precise pane targeting
 - No `rc-` prefix convention -- works with any existing tmux setup
 - Manually created sessions share a single `remote-claude` tmux session with named windows
-- Service worker (`public/sw.js`) for notifications — required on Android Chrome where `new Notification()` doesn't work
+- Web Push API for reliable mobile notifications — server pushes directly to service worker via Google push servers, bypassing WebSocket (Android kills WS when tab is backgrounded)
+- Service worker (`frontend/public/sw.js`, built to `public/sw.js`) handles push events and notification clicks
+- VAPID keys and push subscriptions persisted in `~/.remote-claude/data/`
+- SW push handler skips notification when a page client is visible (avoids duplicates with client-side notifications)
+- Client-side notifications still fire when page is active (instant, no external dependency)
 - Notification modes cycle: off → silent → vibrate → full (persisted in localStorage)
+- Toggling notifications on subscribes to push; toggling off unsubscribes
 - Long-press bell icon to fire a test notification
 - Frontend is now a React/Vite app in `frontend/` (replaces old single-file HTML)
 - `public/index.html` is a built artifact from the React frontend
