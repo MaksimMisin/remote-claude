@@ -413,17 +413,8 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
 
         await sessionManager.sendPrompt(route.id, promptText);
 
-        // Emit a synthetic prompt event so the dashboard shows it immediately
-        const promptEvent: ClaudeEvent = {
-          id: `web-${Date.now()}-${randomBytes(4).toString('hex')}`,
-          timestamp: Date.now(),
-          type: 'user_prompt_submit',
-          sessionId: session.claudeSessionId || session.id,
-          cwd: session.cwd,
-          assistantText: parsed.text || '',
-          tmuxTarget: session.tmuxTarget,
-        };
-        eventProcessor.ingest(promptEvent);
+        // The UserPromptSubmit hook will fire and create the event naturally.
+        // No synthetic event here — it caused duplicates with the hook event.
 
         // For slash commands: capture pane output after a delay and broadcast it
         if (isSlashCmd && tmuxTarget) {
