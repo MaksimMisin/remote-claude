@@ -1,0 +1,27 @@
+{
+  "name": "Remote Claude",
+  "short_name": "Remote Claude",
+  "description": "Monitor and control Claude Code sessions remotely",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#1C1C1E",
+  "theme_color": "#1C1C1E",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
