@@ -21,7 +21,7 @@ variable "custom_subdomain" {
   default     = "claude"
 }
 
-variable "github_username" {
-  description = "GitHub username allowed to access the dashboard"
-  type        = string
+variable "allowed_emails" {
+  description = "Email addresses allowed to access the dashboard"
+  type        = list(string)
 }
