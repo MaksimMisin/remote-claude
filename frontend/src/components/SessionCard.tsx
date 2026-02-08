@@ -1,4 +1,4 @@
-import { memo } from 'react';
+import { memo, useRef, useState } from 'react';
 import type { ManagedSession } from '../types';
 import { relativeTime, formatTokens } from '../utils/time';
 import { actionSummary, stripMarkers } from '../utils/events';
@@ -41,6 +41,8 @@ function shortenPath(cwd: string): string {
   return cwd;
 }
 
+const SWIPE_THRESHOLD = 80;
+
 export const SessionCard = memo(function SessionCard({
   session,
   selected,
@@ -75,64 +77,155 @@ export const SessionCard = memo(function SessionCard({
   const gitDirty = session.gitDirty || false;
   const tokens = session.totalTokens;
 
+  // --- Swipe handling (mobile) ---
+  const cardRef = useRef<HTMLDivElement>(null);
+  const touchRef = useRef({ startX: 0, startY: 0, locked: null as 'h' | 'v' | null, currentX: 0 });
+  const preventClickRef = useRef(false);
+  const [swipeDir, setSwipeDir] = useState<'left' | 'right' | null>(null);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    touchRef.current = { startX: t.clientX, startY: t.clientY, locked: null, currentX: 0 };
+    const el = cardRef.current;
+    if (el) {
+      el.style.transition = 'none';
+      el.style.transform = '';
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    const tr = touchRef.current;
+    const t = e.touches[0];
+    const dx = t.clientX - tr.startX;
+    const dy = t.clientY - tr.startY;
+    if (!tr.locked) {
+      if (Math.abs(dx) > 8 || Math.abs(dy) > 8) {
+        tr.locked = Math.abs(dx) > Math.abs(dy) ? 'h' : 'v';
+      }
+    }
+    if (tr.locked === 'h') {
+      tr.currentX = dx;
+      const el = cardRef.current;
+      if (el) el.style.transform = `translateX(${dx}px)`;
+      setSwipeDir(dx > 0 ? 'right' : 'left');
+    }
+  };
+
+  const handleTouchEnd = () => {
+    const tr = touchRef.current;
+    const el = cardRef.current;
+    if (!el || tr.locked !== 'h') {
+      setSwipeDir(null);
+      return;
+    }
+    preventClickRef.current = true;
+    el.style.transition = 'transform 0.3s ease-out';
+    if (tr.currentX < -SWIPE_THRESHOLD) {
+      el.style.transform = `translateX(-${window.innerWidth}px)`;
+      setTimeout(() => onClose(), 280);
+    } else if (tr.currentX > SWIPE_THRESHOLD) {
+      el.style.transform = `translateX(${window.innerWidth}px)`;
+      setTimeout(() => onDismiss(), 280);
+    } else {
+      el.style.transform = '';
+      setSwipeDir(null);
+      setTimeout(() => { if (el) el.style.transition = ''; }, 300);
+    }
+    tr.currentX = 0;
+  };
+
+  const handleTouchCancel = () => {
+    const el = cardRef.current;
+    if (el) {
+      el.style.transition = 'transform 0.3s ease-out';
+      el.style.transform = '';
+      setTimeout(() => { if (el) el.style.transition = ''; }, 300);
+    }
+    setSwipeDir(null);
+    touchRef.current.currentX = 0;
+  };
+
+  const handleClick = () => {
+    if (preventClickRef.current) {
+      preventClickRef.current = false;
+      return;
+    }
+    onClick();
+  };
+
   return (
-    <div className={className} onClick={onClick}>
-      <div className="card-header">
-        <div className={`dot dot-${session.status}`} />
-        <div className="card-name">{displayName}</div>
-        <div className={`card-header-actions${selected ? ' always-visible' : ''}`}>
-          <button
-            className="card-header-btn card-btn-hide"
-            onClick={(e) => { e.stopPropagation(); if (confirm('Hide this session?')) onDismiss(); }}
-          >
-            Hide
-          </button>
-          <button
-            className="card-header-btn card-btn-close"
-            onClick={(e) => { e.stopPropagation(); if (confirm('Close and kill this session?')) onClose(); }}
-          >
-            Close
-          </button>
+    <div className="swipe-container">
+      {swipeDir && (
+        <div className={`swipe-action ${swipeDir === 'right' ? 'swipe-hide' : 'swipe-close'}`}>
+          {swipeDir === 'right' ? 'Hide' : 'Close'}
         </div>
-        <div className="card-time">{relativeTime(session.lastActivity)}</div>
-      </div>
+      )}
+      <div
+        ref={cardRef}
+        className={className}
+        onClick={handleClick}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
+      >
+        <div className="card-header">
+          <div className={`dot dot-${session.status}`} />
+          <div className="card-name">{displayName}</div>
+          <div className={`card-header-actions${selected ? ' always-visible' : ''}`}>
+            <button
+              className="card-header-btn card-btn-hide"
+              onClick={(e) => { e.stopPropagation(); if (confirm('Hide this session?')) onDismiss(); }}
+            >
+              Hide
+            </button>
+            <button
+              className="card-header-btn card-btn-close"
+              onClick={(e) => { e.stopPropagation(); if (confirm('Close and kill this session?')) onClose(); }}
+            >
+              Close
+            </button>
+          </div>
+          <div className="card-time">{relativeTime(session.lastActivity)}</div>
+        </div>
 
-      {/* Context bar: folder, git branch, tokens */}
-      <div className="card-ctx">
-        {folder && (
-          <span className="ctx-item ctx-folder" title={session.cwd}>{folder}</span>
-        )}
-        {gitBranch && (
-          <span className="ctx-item ctx-git">
-            {gitBranch}{gitDirty && <span className="ctx-dirty">*</span>}
-          </span>
-        )}
-        {tokens != null && tokens > 0 && (
-          <span className="ctx-item ctx-tokens">{formatTokens(tokens)} tok</span>
-        )}
-        {hasQueuedPrompt && session.status === 'working' && (
-          <span className="card-queued-badge">Queued</span>
-        )}
-      </div>
+        {/* Context bar: folder, git branch, tokens */}
+        <div className="card-ctx">
+          {folder && (
+            <span className="ctx-item ctx-folder" title={session.cwd}>{folder}</span>
+          )}
+          {gitBranch && (
+            <span className="ctx-item ctx-git">
+              {gitBranch}{gitDirty && <span className="ctx-dirty">*</span>}
+            </span>
+          )}
+          {tokens != null && tokens > 0 && (
+            <span className="ctx-item ctx-tokens">{formatTokens(tokens)} tok</span>
+          )}
+          {hasQueuedPrompt && session.status === 'working' && (
+            <span className="card-queued-badge">Queued</span>
+          )}
+        </div>
 
-      <div className="card-summary">
-        {hasPerm && !selected
-          ? permissionSummary(session.permissionRequest!.tool, session.permissionRequest!.toolInput)
-          : actionSummary(session, cancelling)}
+        <div className="card-summary">
+          {hasPerm && !selected
+            ? permissionSummary(session.permissionRequest!.tool, session.permissionRequest!.toolInput)
+            : actionSummary(session, cancelling)}
+        </div>
+        {selected && hasPerm && onPermissionAction && (
+          <PermissionPrompt
+            tool={session.permissionRequest!.tool}
+            toolInput={session.permissionRequest!.toolInput}
+            onAction={onPermissionAction}
+          />
+        )}
+        {showContext && contextText && (
+          <div className="card-context">{contextText}</div>
+        )}
+        {isWaiting && !hasPerm && session.lastMarker && !contextText && (
+          <div className="card-marker">{session.lastMarker.message}</div>
+        )}
       </div>
-      {selected && hasPerm && onPermissionAction && (
-        <PermissionPrompt
-          tool={session.permissionRequest!.tool}
-          toolInput={session.permissionRequest!.toolInput}
-          onAction={onPermissionAction}
-        />
-      )}
-      {showContext && contextText && (
-        <div className="card-context">{contextText}</div>
-      )}
-      {isWaiting && !hasPerm && session.lastMarker && !contextText && (
-        <div className="card-marker">{session.lastMarker.message}</div>
-      )}
     </div>
   );
 });

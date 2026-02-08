@@ -166,15 +166,45 @@ header h1 {
 
 /* --- Session Cards --- */
 
+.swipe-container {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+  margin-bottom: 8px;
+  touch-action: pan-y;
+}
+
+.swipe-action {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  font-size: 16px;
+  font-weight: 600;
+  color: #fff;
+  padding: 0 20px;
+}
+
+.swipe-hide {
+  background: var(--gray);
+  justify-content: flex-start;
+}
+
+.swipe-close {
+  background: var(--red);
+  justify-content: flex-end;
+}
+
 .card {
   background: var(--card);
   border-radius: 12px;
   padding: 12px;
-  margin-bottom: 8px;
   cursor: pointer;
   min-height: 64px;
   border-left: 3px solid transparent;
   transition: border-color 0.2s;
+  position: relative;
+  z-index: 1;
 }
 
 .card-header-actions {
@@ -183,14 +213,26 @@ header h1 {
   flex-shrink: 0;
 }
 
-/* Show on hover (desktop) */
-.card:hover .card-header-actions {
-  display: flex;
+/* Show on hover (desktop with pointer) */
+@media (hover: hover) {
+  .card:hover .card-header-actions {
+    display: flex;
+  }
 }
 
-/* Always show when selected (mobile tap) */
-.card-header-actions.always-visible {
-  display: flex;
+/* Always show when selected (desktop) */
+@media (hover: hover) {
+  .card-header-actions.always-visible {
+    display: flex;
+  }
+}
+
+/* Hide buttons entirely on touch devices (swipe replaces them) */
+@media (hover: none) {
+  .card-header-actions,
+  .card-header-actions.always-visible {
+    display: none !important;
+  }
 }
 
 .card-header-btn {
