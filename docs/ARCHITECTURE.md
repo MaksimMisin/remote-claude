@@ -143,7 +143,7 @@ Static file serving from `public/` directory.
 
 ### 3.3 EventProcessor.ts -- Event Ingestion
 
-- **Per-session** in-memory event store (max 100 events per session) -- prevents one active session from evicting another's history
+- **Per-session** in-memory event store (max 500 events per session) -- prevents one active session from evicting another's history
 - Deduplication via Set of event IDs
 - Parses rc markers from `assistantText` if not already set
 - Watches JSONL file with chokidar for crash recovery (reads new lines from offset)

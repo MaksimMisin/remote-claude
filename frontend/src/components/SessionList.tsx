@@ -15,6 +15,7 @@ interface SessionListProps {
   selectedId: string | null;
   cancellingIds: Set<string>;
   queuedSessionIds?: Set<string>;
+  queuedSessionCounts?: Record<string, number>;
   onSelect: (id: string | null) => void;
   onDismiss: (id: string) => void;
   onClose: (id: string) => void;
@@ -27,6 +28,7 @@ export function SessionList({
   selectedId,
   cancellingIds,
   queuedSessionIds,
+  queuedSessionCounts,
   onSelect,
   onDismiss,
   onClose,
@@ -61,6 +63,7 @@ export function SessionList({
             selected
             cancelling={cancellingIds.has(selected.id)}
             hasQueuedPrompt={queuedSessionIds?.has(selected.id)}
+            queuedCount={queuedSessionCounts?.[selected.id] || 0}
             onClick={() => onSelect(null)}
             onDismiss={() => onDismiss(selected.id)}
             onClose={() => onClose(selected.id)}
@@ -81,6 +84,7 @@ export function SessionList({
           selected={false}
           cancelling={cancellingIds.has(s.id)}
           hasQueuedPrompt={queuedSessionIds?.has(s.id)}
+          queuedCount={queuedSessionCounts?.[s.id] || 0}
           onClick={() => onSelect(s.id)}
           onDismiss={() => onDismiss(s.id)}
           onClose={() => onClose(s.id)}
