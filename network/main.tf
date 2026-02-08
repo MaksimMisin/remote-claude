@@ -73,20 +73,18 @@ resource "cloudflare_zero_trust_access_application" "remote_claude" {
   domain                    = local.fqdn
   type                      = "self_hosted"
   session_duration          = "720h"
-  auto_redirect_to_identity = true
+  auto_redirect_to_identity = false
 }
 
-# Access policy: allow only the specified GitHub user
+# Access policy: allow only specified email addresses (via one-time PIN)
 resource "cloudflare_zero_trust_access_policy" "remote_claude" {
   zone_id        = data.cloudflare_zone.domain.id
   application_id = cloudflare_zero_trust_access_application.remote_claude.id
-  name           = "GitHub login"
+  name           = "Email login"
   decision       = "allow"
   precedence     = 1
 
   include {
-    github {
-      name = var.github_username
-    }
+    email = var.allowed_emails
   }
 }
