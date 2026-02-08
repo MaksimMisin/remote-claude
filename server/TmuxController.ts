@@ -184,6 +184,32 @@ export async function capturePane(target: string, lines = 40): Promise<string> {
   }
 }
 
+/** Check if a Claude Code pane shows active work (progress indicators). */
+export async function isActivelyWorking(target: string): Promise<boolean> {
+  validateTarget(target);
+  try {
+    const stdout = await execFileAsync('tmux', [
+      'capture-pane', '-t', target, '-p', '-S', '-20',
+    ]);
+    // Strip ANSI escape codes
+    const clean = stdout.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+    // Look for Claude Code progress indicators:
+    // - "· Clauding…" / "· Thinking…" / spinner lines
+    // - "Waiting for task" (background task in progress)
+    // - "Running" tool execution lines
+    for (const line of clean.split('\n')) {
+      const trimmed = line.trim();
+      // Spinner pattern: "· SomeWord…" (e.g. "· Clauding… (20m 4s · ↓ 2.3k tokens)")
+      if (/^·\s+\S+/.test(trimmed)) return true;
+      // "Waiting for task" pattern
+      if (/Waiting for task/i.test(trimmed)) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 export async function killSession(tmuxSession: string): Promise<void> {
   validateSessionName(tmuxSession);
   await execFileAsync('tmux', ['kill-session', '-t', tmuxSession]);

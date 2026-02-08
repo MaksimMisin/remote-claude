@@ -26,13 +26,13 @@ This document is the design north star. Not everything is built yet.
 | Section | Status | Notes |
 |---------|--------|-------|
 | Information Architecture | Partial | Single-page dashboard, no tab bar or URL routing |
-| Session Card Design | Implemented | Cards, state dots, priority ordering, swipe close/dismiss |
-| Notification UX | Partial | Service worker notifications (Android+desktop), 4-mode cycle (off/silent/vibrate/full), no P0-P3 tiers or grouping |
-| Quick-Action Flows | Partial | Permission UI inline on cards, not bottom sheet overlay |
+| Session Card Design | Implemented | Cards, state dots, priority ordering, swipe close/dismiss with confirmation dialogs, inline rename on selected card |
+| Notification UX | Mostly done | Web Push via VAPID (Android+desktop), service worker, 4-mode cycle (off/silent/vibrate/full). Missing: P0-P3 tiers, notification grouping |
+| Quick-Action Flows | Partial | Permission UI inline on cards (Yes/Allow All/No), not bottom sheet overlay |
 | Voice Interaction | Not started | No TTS or STT |
-| Gesture Shortcuts | Partial | Swipe on cards for close/dismiss, no swipe-to-approve |
+| Gesture Shortcuts | Partial | Swipe on cards for close/dismiss with confirmation, no swipe-to-approve |
 | State Machine | Implemented | 4 states (idle/working/waiting/offline) |
-| Progressive Disclosure | Partial | Glance + interact tiers, no deep dive view |
+| Progressive Disclosure | Partial | Glance + interact tiers, expandable event details, no deep dive view |
 | Mobile-Specific | Partial | Dark theme, thumb zone, PWA manifest. No Live Activity |
 | Accessibility | Partial | Touch targets, reduced motion. No ARIA audit |
 | Performance Budgets | Not measured | No formal testing |
@@ -40,9 +40,12 @@ This document is the design north star. Not everything is built yet.
 
 Features added beyond this design: image uploads, session creation modal with flag
 toggles, git branch/dirty tracking, token counting, prompt queueing, Cloudflare
-Tunnel internet exposure, session dismiss/close, service worker for Android
-notifications, 4-mode notification cycle (off/silent/vibrate/full) with localStorage
-persistence, long-press bell icon to test notifications.
+Tunnel internet exposure, session dismiss/close with confirmation dialogs, Web Push
+notifications via VAPID for reliable Android background delivery, service worker
+(frontend/public/sw.js) handling push events and notification clicks, 4-mode
+notification cycle (off/silent/vibrate/full) with localStorage persistence,
+long-press bell icon to test notifications, inline expandable diffs/commands/plans
+in event feed, slash command output capture via tmux pane diffing.
 
 ---
 
