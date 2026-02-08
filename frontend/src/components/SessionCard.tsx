@@ -134,11 +134,23 @@ export const SessionCard = memo(function SessionCard({
     preventClickRef.current = true;
     el.style.transition = 'transform 0.3s ease-out';
     if (tr.currentX < -SWIPE_THRESHOLD) {
-      el.style.transform = `translateX(-${window.innerWidth}px)`;
-      setTimeout(() => onClose(), 280);
+      if (confirm('Close and kill this session?')) {
+        el.style.transform = `translateX(-${window.innerWidth}px)`;
+        setTimeout(() => onClose(), 280);
+      } else {
+        el.style.transform = '';
+        setSwipeDir(null);
+        setTimeout(() => { if (el) el.style.transition = ''; }, 300);
+      }
     } else if (tr.currentX > SWIPE_THRESHOLD) {
-      el.style.transform = `translateX(${window.innerWidth}px)`;
-      setTimeout(() => onDismiss(), 280);
+      if (confirm('Hide this session?')) {
+        el.style.transform = `translateX(${window.innerWidth}px)`;
+        setTimeout(() => onDismiss(), 280);
+      } else {
+        el.style.transform = '';
+        setSwipeDir(null);
+        setTimeout(() => { if (el) el.style.transition = ''; }, 300);
+      }
     } else {
       el.style.transform = '';
       setSwipeDir(null);
