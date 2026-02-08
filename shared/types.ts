@@ -4,6 +4,11 @@
 // ============================================================
 
 // --- Session Types ---
+//
+// "Session" = a Claude Code instance, NOT a tmux session.
+// Server-created sessions run as windows in the shared 'remote-claude' tmux session.
+// Auto-discovered sessions run in whatever tmux session/window/pane the user launched them in.
+// The tmuxTarget field (e.g. "Personal:3.0") encodes the full tmux address: session:window.pane.
 
 export type SessionStatus = 'idle' | 'working' | 'waiting' | 'offline';
 

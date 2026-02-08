@@ -113,7 +113,7 @@ export class SessionManager {
   /** Create a new session as a window in the shared tmux session. */
   async create(name: string, cwd: string, flags?: string): Promise<ManagedSession> {
     const id = randomBytes(4).toString('hex');
-    const tmuxTarget = await tmux.createSession(id, cwd, name, flags);
+    const tmuxTarget = await tmux.createWindow(id, cwd, name, flags);
     const session: ManagedSession = {
       id,
       name,

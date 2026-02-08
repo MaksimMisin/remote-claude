@@ -92,6 +92,20 @@ reachable in 1-2 taps from the dashboard.
 
 ---
 
+## Terminology
+
+**"Session"** in this project always means a **Claude Code instance** -- the process
+running in a tmux pane. This matches Claude Code's own terminology. When referring to
+the tmux concept, always say **"tmux session"** explicitly.
+
+- Dashboard UI: "session" = Claude Code instance (shown as a card)
+- Tmux: a tmux session contains windows, which contain panes
+- Server-created sessions run as **windows** in the shared `remote-claude` tmux session
+- Auto-discovered sessions run in whatever tmux pane the user launched Claude in
+- `tmuxTarget` (e.g. `Personal:3.0`) = `tmuxSession:windowIndex.paneIndex`
+
+---
+
 ## 2. Session Card Design
 
 Each session is represented by a card on the dashboard. Cards are the atomic unit of
