@@ -85,7 +85,7 @@ const eventProcessor = new EventProcessor((event: ClaudeEvent) => {
 const prevStatuses = new Map<string, string>();
 
 const sessionManager = new SessionManager(
-  (session) => {
+  async (session) => {
     broadcast({ type: 'session_update', payload: session });
 
     // Send push notifications for important status transitions
@@ -97,21 +97,21 @@ const sessionManager = new SessionManager(
       ?.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim().slice(0, 200) || '';
 
     if (prev === 'working' && session.status === 'waiting') {
-      pushManager.sendToAll({
+      await pushManager.sendToAll({
         title: name + ' needs input',
         body: snippet || session.lastMarker?.message || 'Waiting for response',
         tag: 'rc-' + session.id,
         urgent: true,
       });
     } else if (prev === 'working' && session.status === 'idle') {
-      pushManager.sendToAll({
+      await pushManager.sendToAll({
         title: name + ' finished',
         body: snippet || session.lastMarker?.message || 'Task complete',
         tag: 'rc-' + session.id,
         urgent: false,
       });
     } else if (session.status === 'waiting' && prev !== 'waiting' && prev !== undefined) {
-      pushManager.sendToAll({
+      await pushManager.sendToAll({
         title: name + ' needs input',
         body: snippet || session.lastMarker?.message || 'Waiting for response',
         tag: 'rc-' + session.id,

@@ -17,13 +17,13 @@ import * as tmux from './TmuxController.js';
 export class SessionManager {
   private sessions = new Map<string, ManagedSession>();
   private healthInterval: ReturnType<typeof setInterval> | null = null;
-  private onSessionUpdate: (session: ManagedSession) => void;
+  private onSessionUpdate: (session: ManagedSession) => void | Promise<void>;
   private onSessionRemoved: (sessionId: string) => void;
   /** claudeSessionIds of recently closed/dismissed sessions — prevents auto-re-discovery from exit hooks */
   private recentlyClosedClaudeIds = new Set<string>();
 
   constructor(
-    onSessionUpdate: (session: ManagedSession) => void,
+    onSessionUpdate: (session: ManagedSession) => void | Promise<void>,
     onSessionRemoved?: (sessionId: string) => void,
   ) {
     this.onSessionUpdate = onSessionUpdate;
