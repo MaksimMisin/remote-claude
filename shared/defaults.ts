@@ -16,3 +16,6 @@ export const WS_PING_INTERVAL_MS = 30_000;
 
 export const TMUX_SESSION_PREFIX = 'rc-'; // legacy, kept for reference
 export const TMUX_SESSION_NAME = 'remote-claude';
+
+// Telegram
+export const TELEGRAM_MESSAGE_LIMIT = 4096;

@@ -14,6 +14,7 @@ import type { ClaudeEvent, ServerMessage } from '../shared/types.js';
 import { SessionManager } from './SessionManager.js';
 import { EventProcessor } from './EventProcessor.js';
 import { PushManager } from './PushManager.js';
+import { TelegramBot } from './TelegramBot.js';
 import { capturePane } from './TmuxController.js';
 import { mkdirSync } from 'node:fs';
 
@@ -81,21 +82,29 @@ const eventProcessor = new EventProcessor((event: ClaudeEvent) => {
   sessionManager.handleEvent(event);
 });
 
-/** Track previous session statuses for push notification transitions */
+/** Track previous session statuses for notification transitions */
 const prevStatuses = new Map<string, string>();
+
+// --- Telegram bot (optional) ---
+
+const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+let telegramBot: TelegramBot | null = null;
 
 const sessionManager = new SessionManager(
   async (session) => {
     broadcast({ type: 'session_update', payload: session });
 
-    // Send push notifications for important status transitions
-    const prev = prevStatuses.get(session.id);
+    // Track status transitions for push + telegram notifications
+    const prev = prevStatuses.get(session.id) as import('../shared/types.js').SessionStatus | undefined;
     prevStatuses.set(session.id, session.status);
 
     const name = session.customName || session.name;
     const snippet = session.lastAssistantText
       ?.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim().slice(0, 200) || '';
 
+    // Push notifications
     if (prev === 'working' && session.status === 'waiting') {
       await pushManager.sendToAll({
         title: name + ' needs input',
@@ -117,6 +126,11 @@ const sessionManager = new SessionManager(
         tag: 'rc-' + session.id,
         urgent: true,
       });
+    }
+
+    // Telegram notifications
+    if (telegramBot) {
+      await telegramBot.onStatusChange(prev, session);
     }
   },
   (sessionId) => {
@@ -592,6 +606,21 @@ wss.on('connection', (ws: WebSocket) => {
 
 eventProcessor.startFileWatch();
 sessionManager.startHealthChecks();
+
+// Start Telegram bot if configured
+if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
+  telegramBot = new TelegramBot({
+    token: TELEGRAM_BOT_TOKEN,
+    chatId: TELEGRAM_CHAT_ID,
+    getSessions: () => sessionManager.list(),
+    getSession: (id) => sessionManager.get(id),
+    sendPrompt: (id, text) => sessionManager.sendPrompt(id, text),
+    sendKeys: (id, keys) => sessionManager.sendKeys(id, keys),
+  });
+  telegramBot.start();
+} else {
+  console.log('[Server] Telegram not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable)');
+}
 
 server.listen(SERVER_PORT, BIND_HOST, () => {
   console.log(`[Server] Remote Claude v${VERSION} listening on http://${BIND_HOST}:${SERVER_PORT}`);
