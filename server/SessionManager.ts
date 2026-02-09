@@ -2,8 +2,9 @@
 // SessionManager -- Session CRUD, lifecycle, health checks
 // ============================================================
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import {
   SESSIONS_FILE,
@@ -29,6 +30,24 @@ export class SessionManager {
     this.onSessionUpdate = onSessionUpdate;
     this.onSessionRemoved = onSessionRemoved || (() => {});
     this.load();
+  }
+
+  /** Read the most recently modified plan file from ~/.claude/plans/.
+   *  Returns { planContent, planFile } or null if unavailable. */
+  private static readLatestPlanContent(): { planContent: string; planFile: string } | null {
+    try {
+      const plansDir = join(homedir(), '.claude', 'plans');
+      if (!existsSync(plansDir)) return null;
+      const files = readdirSync(plansDir)
+        .filter(f => f.endsWith('.md'))
+        .map(f => ({ name: f, path: join(plansDir, f), mtime: statSync(join(plansDir, f)).mtimeMs }))
+        .sort((a, b) => b.mtime - a.mtime);
+      if (files.length === 0) return null;
+      const content = readFileSync(files[0].path, 'utf-8').slice(0, 51200);
+      return { planContent: content, planFile: files[0].path };
+    } catch {
+      return null;
+    }
   }
 
   /** Build a human-readable context string for notification events (tool permission prompts). */
@@ -343,7 +362,27 @@ export class SessionManager {
         // Claude Code's Notification hook does NOT include tool_name/tool_input,
         // so fall back to the tool info from the preceding pre_tool_use event.
         const permTool = event.tool || session.currentTool;
-        const permInput = event.toolInput || session.currentToolInput;
+        let permInput = event.toolInput || session.currentToolInput;
+
+        // For ExitPlanMode: ensure planContent is available.
+        // The hook injects it into pre_tool_use, but if the fallback chain fails
+        // (race condition, missing data), read the plan file directly as last resort.
+        if (permTool === 'ExitPlanMode' && permInput && !permInput.planContent) {
+          const plan = SessionManager.readLatestPlanContent();
+          if (plan) {
+            permInput = { ...permInput, ...plan };
+            console.log(`[SessionManager] Injected planContent (${plan.planContent.length} chars) from ${plan.planFile}`);
+          }
+        }
+        if (permTool === 'ExitPlanMode' && !permInput) {
+          // No toolInput at all — read plan file as the sole source
+          const plan = SessionManager.readLatestPlanContent();
+          if (plan) {
+            permInput = plan;
+            console.log(`[SessionManager] Created permInput from plan file: ${plan.planFile}`);
+          }
+        }
+
         if (permTool && permInput) {
           session.permissionRequest = { tool: permTool, toolInput: permInput };
         } else {

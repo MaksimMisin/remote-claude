@@ -5,6 +5,7 @@
 import type { Api } from 'grammy';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { TELEGRAM_TOPICS_FILE } from '../shared/defaults.js';
+import { getStatusEmoji } from './telegram-format.js';
 
 interface TopicEntry {
   topicId: number;
@@ -47,10 +48,6 @@ export class TopicManager {
     // Fast path: already exists
     const existing = this.store.topics[sessionId];
     if (existing && !existing.closed) {
-      // Rename topic if display name changed
-      if (displayName && existing.name !== displayName) {
-        this.renameTopic(sessionId, displayName);
-      }
       return existing.topicId;
     }
 
@@ -117,31 +114,6 @@ export class TopicManager {
     }
   }
 
-  /** Rename a topic in Telegram and update the store (fire-and-forget). */
-  private renameTopic(sessionId: string, newName: string): void {
-    const entry = this.store.topics[sessionId];
-    if (!entry) return;
-
-    // Update store immediately so we don't retry on every call
-    const oldName = entry.name;
-    entry.name = newName;
-    this.save();
-
-    this.api
-      .editForumTopic(this.chatId, entry.topicId, { name: newName })
-      .then(() => {
-        console.log(
-          `[Topics] Renamed topic ${entry.topicId} "${oldName}" → "${newName}"`,
-        );
-      })
-      .catch((err) => {
-        console.warn(
-          `[Topics] Failed to rename topic ${entry.topicId}:`,
-          (err as Error).message || err,
-        );
-      });
-  }
-
   /** Simple lookup: sessionId → topicId. */
   getTopicId(sessionId: string): number | undefined {
     return this.store.topics[sessionId]?.topicId;
@@ -175,15 +147,42 @@ export class TopicManager {
     }
   }
 
-  /** Getter for the pinned status message ID. */
-  get pinnedMessageId(): number | undefined {
-    return this.store.pinnedMessageId;
-  }
+  /** Last title set per topic — avoids redundant API calls. */
+  private lastTitle = new Map<string, string>();
 
-  /** Setter for the pinned status message ID (auto-saves). */
-  set pinnedMessageId(id: number | undefined) {
-    this.store.pinnedMessageId = id;
-    this.save();
+  /**
+   * Update the topic title to include a status emoji prefix.
+   * e.g. "🟢 my-project". Skips if the title hasn't changed.
+   */
+  async updateTopicTitle(
+    sessionId: string,
+    status: string,
+    displayName: string,
+  ): Promise<void> {
+    const entry = this.store.topics[sessionId];
+    if (!entry || entry.closed) return;
+
+    const emoji = getStatusEmoji(status);
+    const title = `${emoji} ${displayName}`;
+
+    // Skip if unchanged
+    if (this.lastTitle.get(sessionId) === title) return;
+    this.lastTitle.set(sessionId, title);
+
+    // Update base name in store
+    if (entry.name !== displayName) {
+      entry.name = displayName;
+      this.save();
+    }
+
+    try {
+      await this.api.editForumTopic(this.chatId, entry.topicId, { name: title });
+    } catch (err) {
+      console.warn(
+        `[Topics] Failed to update topic title ${entry.topicId}:`,
+        (err as Error).message || err,
+      );
+    }
   }
 
   // -----------------------------------------------------------
