@@ -495,9 +495,16 @@ export class TelegramBot {
       .slice(0, 500);
 
     // In forum mode, get/create the session's topic
+    // If topic creation fails, skip notification — never fall through to General
     let topicId: number | undefined;
     if (this.forumMode && this.topicManager) {
       topicId = await this.topicManager.ensureTopic(session.id, name);
+      if (!topicId) {
+        console.warn(`[Telegram] No topic for session ${session.id}, skipping notification`);
+        // Still update pinned status even if topic is missing
+        this.debouncedUpdatePinnedStatus();
+        return;
+      }
     }
 
     // Leaving working — flush any pending event buffer immediately
@@ -625,23 +632,15 @@ export class TelegramBot {
           });
           return;
         } catch {
-          // Message was deleted or too old -- recreate
+          // Message was deleted or too old — don't recreate (avoids General spam)
+          console.warn('[Telegram] Could not edit pinned status message, will recreate on /sessions');
           this.topicManager.pinnedMessageId = undefined;
+          return;
         }
       }
 
-      // Create new pinned message in General topic (omit topicId — Telegram rejects thread_id for General)
-      const msg = await this.sendMessage(html, { silent: true });
-      if (msg) {
-        try {
-          await this.bot.api.pinChatMessage(this.chatId, msg.message_id, {
-            disable_notification: true,
-          });
-          this.topicManager.pinnedMessageId = msg.message_id;
-        } catch (err) {
-          console.error('[Telegram] Failed to pin status message:', err);
-        }
-      }
+      // No existing pinned message — create one (only happens on first startup or after /sessions)
+      await this.createPinnedStatus(html);
     } finally {
       this.pinnedStatusLock = false;
     }
@@ -709,6 +708,23 @@ export class TelegramBot {
     // Send as one message
     const html = lines.join('\n');
     await this.sendMessage(html, { topicId, silent: true });
+  }
+
+  /** Create a new pinned status message in General. */
+  private async createPinnedStatus(html: string): Promise<void> {
+    const msg = await this.sendMessage(html, { silent: true });
+    if (msg) {
+      try {
+        await this.bot.api.pinChatMessage(this.chatId, msg.message_id, {
+          disable_notification: true,
+        });
+        if (this.topicManager) {
+          this.topicManager.pinnedMessageId = msg.message_id;
+        }
+      } catch (err) {
+        console.error('[Telegram] Failed to pin status message:', err);
+      }
+    }
   }
 
   /** Debounced version -- avoids flooding Telegram API on rapid status changes. */
