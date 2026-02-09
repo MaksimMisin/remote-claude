@@ -147,6 +147,40 @@ export class TopicManager {
     }
   }
 
+  /** Delete a forum topic and remove it from the store entirely. */
+  async deleteTopic(sessionId: string): Promise<void> {
+    const entry = this.store.topics[sessionId];
+    if (!entry) return;
+
+    try {
+      await this.api.deleteForumTopic(this.chatId, entry.topicId);
+      console.log(
+        `[Topics] Deleted topic ${entry.topicId} for session ${sessionId}`,
+      );
+    } catch (err) {
+      console.warn(
+        `[Topics] Failed to delete topic ${entry.topicId}:`,
+        (err as Error).message || err,
+      );
+    }
+    // Remove from store regardless — if API failed, the topic is orphaned anyway
+    delete this.store.topics[sessionId];
+    this.lastTitle.delete(sessionId);
+    this.save();
+  }
+
+  /** Delete all closed (inactive) topics from Telegram and the store. */
+  async deleteClosedTopics(): Promise<void> {
+    const closed = Object.entries(this.store.topics).filter(
+      ([, e]) => e.closed,
+    );
+    if (closed.length === 0) return;
+    console.log(`[Topics] Cleaning up ${closed.length} closed topic(s)...`);
+    for (const [sessionId] of closed) {
+      await this.deleteTopic(sessionId);
+    }
+  }
+
   /** Last title set per topic — avoids redundant API calls. */
   private lastTitle = new Map<string, string>();
 
