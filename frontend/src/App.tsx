@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import type { ManagedSession, ClaudeEvent, RcMarker, QueuedPrompt } from './types';
+import type { ManagedSession, ClaudeEvent, RcMarker } from './types';
 import type { PermissionAction } from './components/PermissionPrompt';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useNotifications } from './hooks/useNotifications';

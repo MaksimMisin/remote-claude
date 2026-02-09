@@ -648,6 +648,7 @@ if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
     getSession: (id) => sessionManager.get(id),
     sendPrompt: (id, text) => sessionManager.sendPrompt(id, text),
     sendKeys: (id, keys) => sessionManager.sendKeys(id, keys),
+    createSession: (name, cwd, flags) => sessionManager.create(name, cwd, flags),
   });
   telegramBot.start();
 } else {

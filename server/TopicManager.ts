@@ -11,6 +11,7 @@ interface TopicEntry {
   topicId: number;
   name: string;
   closed?: boolean;
+  initialPrompt?: string;
 }
 
 interface TopicStore {
@@ -24,6 +25,8 @@ export class TopicManager {
   private api: Api;
   /** In-flight topic creation promises — prevents race-condition duplicates. */
   private pending = new Map<string, Promise<number | undefined>>();
+  /** Initial prompt text waiting for topic creation (race: event arrives before topic). */
+  private pendingInitialPrompt = new Map<string, string>();
 
   constructor(chatId: string, api: Api) {
     this.chatId = chatId;
@@ -104,6 +107,13 @@ export class TopicManager {
       console.log(
         `[Topics] Created topic ${topicId} "${displayName}" for session ${sessionId}`,
       );
+      // Store pending initial prompt if a user_prompt_submit arrived before topic creation
+      const pending = this.pendingInitialPrompt.get(sessionId);
+      if (pending) {
+        this.pendingInitialPrompt.delete(sessionId);
+        this.store.topics[sessionId].initialPrompt = pending;
+        this.save();
+      }
       return topicId;
     } catch (err) {
       console.error(
@@ -112,6 +122,30 @@ export class TopicManager {
       );
       return undefined;
     }
+  }
+
+  /**
+   * Store the initial user prompt for a session's topic (called on first user_prompt_submit).
+   * Only stores once — subsequent prompts are ignored.
+   * If the topic doesn't exist yet, queues the prompt for when it's created.
+   */
+  setInitialPrompt(sessionId: string, prompt: string): void {
+    const entry = this.store.topics[sessionId];
+    if (!entry) {
+      // Topic not created yet — queue for later
+      if (!this.pendingInitialPrompt.has(sessionId)) {
+        this.pendingInitialPrompt.set(sessionId, prompt);
+      }
+      return;
+    }
+    if (entry.initialPrompt) return; // already set
+    entry.initialPrompt = prompt;
+    this.save();
+  }
+
+  /** Get the stored initial prompt for a session. */
+  getInitialPrompt(sessionId: string): string | undefined {
+    return this.store.topics[sessionId]?.initialPrompt;
   }
 
   /** Simple lookup: sessionId → topicId. */
@@ -131,7 +165,8 @@ export class TopicManager {
   transferTopic(fromSessionId: string, toSessionId: string): boolean {
     const entry = this.store.topics[fromSessionId];
     if (!entry) return false;
-    // Move the entry to the new key
+    // Move the entry to the new key, reset initial prompt so new session's first prompt is captured
+    delete entry.initialPrompt;
     this.store.topics[toSessionId] = entry;
     delete this.store.topics[fromSessionId];
     this.lastTitle.delete(fromSessionId);
@@ -181,6 +216,7 @@ export class TopicManager {
     // Remove from store regardless — if API failed, the topic is orphaned anyway
     delete this.store.topics[sessionId];
     this.lastTitle.delete(sessionId);
+    this.pendingInitialPrompt.delete(sessionId);
     this.save();
   }
 
