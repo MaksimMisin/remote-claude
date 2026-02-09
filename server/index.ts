@@ -452,7 +452,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
           paneBefore = await capturePane(tmuxTarget);
         }
 
-        await sessionManager.sendPrompt(route.id, promptText);
+        const sendStatus = await sessionManager.sendPrompt(route.id, promptText);
 
         // The UserPromptSubmit hook will fire and create the event naturally.
         // No synthetic event here — it caused duplicates with the hook event.
@@ -496,7 +496,7 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
           }, 1500);
         }
 
-        return json(res, { ok: true });
+        return json(res, { ok: true, status: sendStatus });
       }
 
       if (route.action === 'keys' && method === 'POST') {
@@ -647,8 +647,10 @@ if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
     getSessions: () => sessionManager.list(),
     getSession: (id) => sessionManager.get(id),
     sendPrompt: (id, text) => sessionManager.sendPrompt(id, text),
+    sendCancel: (id) => sessionManager.sendCancel(id),
     sendKeys: (id, keys) => sessionManager.sendKeys(id, keys),
     createSession: (name, cwd, flags) => sessionManager.create(name, cwd, flags),
+    capturePane: (target, lines) => capturePane(target, lines),
   });
   telegramBot.start();
 } else {

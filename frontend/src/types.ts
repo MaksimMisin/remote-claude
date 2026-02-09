@@ -87,7 +87,4 @@ export interface PendingImage {
   mimeType: string;
 }
 
-export interface QueuedPrompt {
-  text: string;
-  images: { name: string; base64: string; mimeType: string }[];
-}
+

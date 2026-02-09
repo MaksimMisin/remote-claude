@@ -239,12 +239,17 @@ export class SessionManager {
     return target;
   }
 
-  /** Send a prompt to a session's tmux pane. */
-  async sendPrompt(id: string, text: string): Promise<void> {
+  /** Send a prompt to a session's tmux pane.
+   *  Returns the session status at time of send ('idle' = sent directly,
+   *  'working' = queued by Claude Code's native queue). */
+  async sendPrompt(id: string, text: string): Promise<SessionStatus> {
     const session = this.sessions.get(id);
     if (!session) throw new Error('Session not found');
     if (session.status === 'offline') throw new Error('Session is offline');
+    if (session.status === 'waiting') throw new Error('Session is waiting for permission — approve or reject first');
+    const status = session.status;
     await tmux.sendPrompt(this.resolveTarget(session), text);
+    return status;
   }
 
   /** Send raw tmux keys to a session's pane. */
