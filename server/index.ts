@@ -658,6 +658,12 @@ if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
     capturePane: (target, lines) => capturePane(target, lines),
   });
   telegramBot.start();
+  // Sync topics after first health check has determined which sessions are alive
+  setTimeout(() => {
+    telegramBot?.syncTopics().catch((err) => {
+      console.error('[Telegram] Topic sync error:', err);
+    });
+  }, 5000);
 } else {
   console.log('[Server] Telegram not configured (set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable)');
 }

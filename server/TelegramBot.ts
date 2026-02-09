@@ -419,25 +419,36 @@ export class TelegramBot {
     }
 
     const sessionId = this.topicManager.getSessionId(threadId);
-    if (!sessionId) {
-      await ctx.reply('This topic is not linked to a session.', {
-        message_thread_id: threadId,
-      });
-      return;
+    if (sessionId) {
+      // Kill the tmux window and remove the session
+      await this.config.closeSession(sessionId);
+
+      // Clean up event buffers for this session
+      const timer = this.eventFlushTimers.get(sessionId);
+      if (timer) {
+        clearTimeout(timer);
+        this.eventFlushTimers.delete(sessionId);
+      }
+      this.eventBuffer.delete(sessionId);
+
+      await this.topicManager.deleteTopic(sessionId);
+    } else {
+      // Untracked topic — just delete it directly from Telegram
+      try {
+        await this.bot.api.deleteForumTopic(this.chatId, threadId);
+        console.log(`[Telegram] Deleted untracked topic ${threadId}`);
+      } catch {
+        // deleteForumTopic may fail — try closing instead
+        try {
+          await this.bot.api.closeForumTopic(this.chatId, threadId);
+          console.log(`[Telegram] Closed untracked topic ${threadId}`);
+        } catch (err2) {
+          await ctx.reply(`Failed to close topic: ${(err2 as Error).message}`, {
+            message_thread_id: threadId,
+          });
+        }
+      }
     }
-
-    // Kill the tmux window and remove the session
-    await this.config.closeSession(sessionId);
-
-    // Clean up event buffers for this session
-    const timer = this.eventFlushTimers.get(sessionId);
-    if (timer) {
-      clearTimeout(timer);
-      this.eventFlushTimers.delete(sessionId);
-    }
-    this.eventBuffer.delete(sessionId);
-
-    await this.topicManager.deleteTopic(sessionId);
   }
 
   // ---- /new command: create session ----
@@ -1394,6 +1405,22 @@ export class TelegramBot {
 
     // Delete the topic entirely
     await this.topicManager.deleteTopic(sessionId);
+  }
+
+  /**
+   * Sync Telegram topics with active sessions. Closes topics for sessions
+   * that no longer exist. Should be called after the first health check
+   * has determined which sessions are alive.
+   */
+  async syncTopics(): Promise<void> {
+    if (!this.forumMode || !this.topicManager) return;
+
+    const activeIds = new Set(
+      this.getSessions()
+        .filter(s => s.status !== 'offline')
+        .map(s => s.id),
+    );
+    await this.topicManager.closeStaleTopics(activeIds);
   }
 
   /**
