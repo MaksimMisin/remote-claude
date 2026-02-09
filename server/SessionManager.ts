@@ -20,15 +20,18 @@ export class SessionManager {
   private healthInterval: ReturnType<typeof setInterval> | null = null;
   private onSessionUpdate: (session: ManagedSession) => void | Promise<void>;
   private onSessionRemoved: (sessionId: string) => void;
+  private onSessionReplaced: (oldSessionId: string, newSessionId: string, newSession: ManagedSession) => void;
   /** claudeSessionIds of recently closed/dismissed sessions — prevents auto-re-discovery from exit hooks */
   private recentlyClosedClaudeIds = new Set<string>();
 
   constructor(
     onSessionUpdate: (session: ManagedSession) => void | Promise<void>,
     onSessionRemoved?: (sessionId: string) => void,
+    onSessionReplaced?: (oldSessionId: string, newSessionId: string, newSession: ManagedSession) => void,
   ) {
     this.onSessionUpdate = onSessionUpdate;
     this.onSessionRemoved = onSessionRemoved || (() => {});
+    this.onSessionReplaced = onSessionReplaced || (() => {});
     this.load();
   }
 
@@ -274,10 +277,12 @@ export class SessionManager {
     if (!session && event.sessionId && event.sessionId !== 'unknown' && !this.recentlyClosedClaudeIds.has(event.sessionId)) {
       // Deduplicate by tmuxTarget: if another session already points to the
       // same pane, replace it (new Claude process reused the pane)
+      let replacedSessionId: string | undefined;
       if (event.tmuxTarget) {
         for (const [existingId, existing] of this.sessions.entries()) {
           if (existing.tmuxTarget === event.tmuxTarget && existing.claudeSessionId !== event.sessionId) {
             console.log(`[SessionManager] Replacing stale session ${existingId} on pane ${event.tmuxTarget}`);
+            replacedSessionId = existingId;
             this.sessions.delete(existingId);
             this.onSessionRemoved(existingId);
             break;
@@ -301,6 +306,11 @@ export class SessionManager {
       };
       this.sessions.set(id, session);
       console.log(`[SessionManager] Auto-discovered session: ${name} (${id})`);
+
+      // Transfer resources (e.g., Telegram topic) from the replaced session
+      if (replacedSessionId) {
+        this.onSessionReplaced(replacedSessionId, id, session);
+      }
     }
 
     if (!session) return;
