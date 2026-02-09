@@ -4,7 +4,7 @@
 // Installs hooks into Claude Code and generates auth token
 // ============================================================
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, chmodSync, symlinkSync, unlinkSync } from 'node:fs';
 import { homedir, networkInterfaces } from 'node:os';
 import { join, dirname } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -23,6 +23,11 @@ const AUTH_TOKEN_FILE = join(DATA_DIR, 'auth-token.txt');
 const CLAUDE_SETTINGS_PATH = join(HOME, '.claude', 'settings.json');
 const HOOK_SOURCE = join(__dirname, '..', 'hooks', 'remote-claude-hook.sh');
 const HOOK_DEST = join(HOOKS_DIR, 'remote-claude-hook.sh');
+const RC_CLI_SOURCE = join(__dirname, 'rc');
+const RC_CLI_DEST = join(RC_DIR, 'bin', 'rc');
+const RC_CLI_BIN_DIR = join(RC_DIR, 'bin');
+const PROJECT_DIR = join(__dirname, '..');
+const PROJECT_DIR_FILE = join(RC_DIR, 'project-dir');
 
 const HOOK_COMMAND = '~/.remote-claude/hooks/remote-claude-hook.sh';
 const SERVER_PORT = 4080;
@@ -103,7 +108,44 @@ function installHookScript(): void {
   logOk('Made executable (chmod 755)');
 }
 
-// --- Step 3: Register hooks in Claude settings ---
+// --- Step 3: Install rc CLI ---
+
+function installCli(): void {
+  logStep('Installing rc CLI');
+
+  if (!existsSync(RC_CLI_SOURCE)) {
+    logWarn(`CLI source not found at ${RC_CLI_SOURCE}`);
+    return;
+  }
+
+  if (!existsSync(RC_CLI_BIN_DIR)) {
+    mkdirSync(RC_CLI_BIN_DIR, { recursive: true });
+  }
+
+  copyFileSync(RC_CLI_SOURCE, RC_CLI_DEST);
+  chmodSync(RC_CLI_DEST, 0o755);
+  logOk(`Copied rc CLI to ${RC_CLI_DEST}`);
+
+  // Save project directory so rc can start the server
+  const resolvedProjectDir = join(__dirname, '..');
+  writeFileSync(PROJECT_DIR_FILE, resolvedProjectDir + '\n');
+  logOk(`Saved project dir to ${PROJECT_DIR_FILE}`);
+
+  // Symlink to /usr/local/bin if possible
+  const symlinkPath = '/usr/local/bin/rc';
+  try {
+    if (existsSync(symlinkPath)) {
+      unlinkSync(symlinkPath);
+    }
+    symlinkSync(RC_CLI_DEST, symlinkPath);
+    logOk(`Symlinked to ${symlinkPath}`);
+  } catch {
+    logWarn(`Could not symlink to ${symlinkPath} (may need sudo)`);
+    log(`Add to PATH manually: export PATH="$HOME/.remote-claude/bin:$PATH"`);
+  }
+}
+
+// --- Step 4: Register hooks in Claude settings ---
 
 function registerHooks(): void {
   logStep('Registering hooks in Claude Code settings');
@@ -179,7 +221,7 @@ function registerHooks(): void {
   logOk(`Settings saved (${added} added, ${skipped} already present)`);
 }
 
-// --- Step 4: Generate auth token ---
+// --- Step 5: Generate auth token ---
 
 function generateAuthToken(): string {
   logStep('Generating auth token');
@@ -199,7 +241,7 @@ function generateAuthToken(): string {
   return token;
 }
 
-// --- Step 5: Print access info ---
+// --- Step 6: Print access info ---
 
 function printAccessInfo(token: string): void {
   const ip = getLocalIP();
@@ -222,6 +264,11 @@ function printAccessInfo(token: string): void {
   console.log('    npm run dev    (with hot reload)');
   console.log('    npm run start  (production)');
   console.log();
+  console.log('  Toggle hooks + server:');
+  console.log('    rc off         (pause hooks & kill server)');
+  console.log('    rc on          (resume hooks)');
+  console.log('    rc             (show status)');
+  console.log();
   console.log('  Open the Mobile Access URL on your phone to connect.');
   console.log('  Make sure your phone is on the same WiFi network.');
   console.log();
@@ -239,6 +286,7 @@ function main(): void {
   try {
     createDirectories();
     installHookScript();
+    installCli();
     registerHooks();
     const token = generateAuthToken();
     printAccessInfo(token);

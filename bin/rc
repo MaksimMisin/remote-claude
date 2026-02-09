@@ -1,0 +1,88 @@
+#!/usr/bin/env bash
+# rc - Remote Claude toggle
+# Usage: rc on | rc off | rc [status]
+
+RC_DIR="$HOME/.remote-claude"
+PAUSE_FILE="$RC_DIR/paused"
+PROJECT_DIR_FILE="$RC_DIR/project-dir"
+LOG_FILE="$RC_DIR/server.log"
+PORT=4080
+
+get_server_pids() {
+  lsof -iTCP:$PORT -sTCP:LISTEN -t 2>/dev/null
+}
+
+start_server() {
+  if get_server_pids &>/dev/null; then
+    echo "server: already running (PID $(get_server_pids))"
+    return
+  fi
+
+  if [ ! -f "$PROJECT_DIR_FILE" ]; then
+    echo "server: can't start — run npm run setup first"
+    return 1
+  fi
+
+  local dir
+  dir="$(cat "$PROJECT_DIR_FILE")"
+  if [ ! -d "$dir" ]; then
+    echo "server: project dir missing: $dir"
+    return 1
+  fi
+
+  cd "$dir" && nohup npm run start >> "$LOG_FILE" 2>&1 &
+  disown
+
+  # Wait up to 5s for the port to open
+  for i in $(seq 1 10); do
+    sleep 0.5
+    if get_server_pids &>/dev/null; then
+      echo "server: started (PID $(get_server_pids)) — log: $LOG_FILE"
+      return
+    fi
+  done
+  echo "server: failed to start — check $LOG_FILE"
+}
+
+case "${1:-status}" in
+  on|start)
+    rm -f "$PAUSE_FILE"
+    echo "hooks: enabled"
+    start_server
+    ;;
+
+  off|stop)
+    touch "$PAUSE_FILE"
+    echo "hooks: paused"
+    PIDS=$(get_server_pids)
+    if [ -n "$PIDS" ]; then
+      kill $PIDS 2>/dev/null
+      echo "server: killed (PID $PIDS)"
+    else
+      echo "server: was not running"
+    fi
+    ;;
+
+  status|"")
+    if [ -f "$PAUSE_FILE" ]; then
+      echo "hooks: PAUSED"
+    else
+      echo "hooks: active"
+    fi
+    PIDS=$(get_server_pids)
+    if [ -n "$PIDS" ]; then
+      echo "server: running (PID $PIDS)"
+    else
+      echo "server: stopped"
+    fi
+    ;;
+
+  log)
+    tail -30 "$LOG_FILE" 2>/dev/null || echo "No log file yet"
+    ;;
+
+  *)
+    echo "Usage: rc [on|off|status|log]"
+    exit 1
+    ;;
+esac

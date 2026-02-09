@@ -8,6 +8,9 @@
 
 set -o pipefail
 
+# --- Pause guard (touch ~/.remote-claude/paused to skip all processing) ---
+[ -f "$HOME/.remote-claude/paused" ] && exit 0
+
 # --- Configuration ---
 DATA_DIR="$HOME/.remote-claude/data"
 EVENTS_FILE="$DATA_DIR/events.jsonl"
