@@ -103,7 +103,7 @@ export class TelegramBot {
     const keyboard = new InlineKeyboard();
     for (const s of sessions) {
       if (s.status === 'offline') continue;
-      const displayName = s.customName || s.name;
+      const displayName = fmt.getDisplayName(s);
       const label = this.activeSessionId === s.id
         ? `\u2714 ${displayName}`
         : displayName;
@@ -123,7 +123,7 @@ export class TelegramBot {
       if (this.activeSessionId) {
         const session = this.getSession(this.activeSessionId);
         const name = session
-          ? (session.customName || session.name)
+          ? fmt.getDisplayName(session)
           : this.activeSessionId;
         await ctx.reply(`Active session: <b>${fmt.escapeHtml(name)}</b>\n\nUsage: /bind &lt;name-or-id&gt;`, {
           parse_mode: 'HTML',
@@ -143,7 +143,7 @@ export class TelegramBot {
     }
 
     this.activeSessionId = session.id;
-    const name = session.customName || session.name;
+    const name = fmt.getDisplayName(session);
     await ctx.reply(`Bound to <b>${fmt.escapeHtml(name)}</b>. Text messages will be sent to this session.`, {
       parse_mode: 'HTML',
     });
@@ -164,7 +164,7 @@ export class TelegramBot {
       return;
     }
 
-    const name = session.customName || session.name;
+    const name = fmt.getDisplayName(session);
     const lines: string[] = [
       `<b>${fmt.escapeHtml(name)}</b>`,
       '',
@@ -227,7 +227,7 @@ export class TelegramBot {
     }
 
     if (session.status === 'offline') {
-      await ctx.reply(`Session <b>${fmt.escapeHtml(session.customName || session.name)}</b> is offline.`, {
+      await ctx.reply(`Session <b>${fmt.escapeHtml(fmt.getDisplayName(session))}</b> is offline.`, {
         parse_mode: 'HTML',
       });
       return;
@@ -235,7 +235,7 @@ export class TelegramBot {
 
     try {
       await this.sendPrompt(this.activeSessionId, text);
-      const name = session.customName || session.name;
+      const name = fmt.getDisplayName(session);
       await ctx.reply(`\u2192 sent to <b>${fmt.escapeHtml(name)}</b>`, {
         parse_mode: 'HTML',
       });
@@ -277,7 +277,7 @@ export class TelegramBot {
             return;
           }
           this.activeSessionId = sessionId;
-          const name = session.customName || session.name;
+          const name = fmt.getDisplayName(session);
           await ctx.answerCallbackQuery({ text: `Bound to ${name}` });
           break;
         }
@@ -326,10 +326,9 @@ export class TelegramBot {
     const byPrefix = sessions.find((s) => s.id.toLowerCase().startsWith(lower));
     if (byPrefix) return byPrefix;
 
-    // Name match (case-insensitive partial)
+    // Display name match (case-insensitive partial — matches same name shown in UI)
     const byName = sessions.find((s) => {
-      const name = (s.customName || s.name).toLowerCase();
-      return name.includes(lower);
+      return fmt.getDisplayName(s).toLowerCase().includes(lower);
     });
     if (byName) return byName;
 
@@ -346,7 +345,7 @@ export class TelegramBot {
     prevStatus: SessionStatus | undefined,
     session: ManagedSession,
   ): Promise<void> {
-    const name = session.customName || session.name;
+    const name = fmt.getDisplayName(session);
     const markerMsg = session.lastMarker?.message;
     const snippet = session.lastAssistantText
       ?.replace(/<!--rc:\w+:?[^>]*-->/g, '')
@@ -429,8 +428,10 @@ export class TelegramBot {
     // start() returns immediately and runs in the background
     this.bot.start({
       drop_pending_updates: true,
-      onStart: () => {
+      onStart: async () => {
         console.log('[Telegram] Bot is running');
+        // Send a startup confirmation so the user knows the bot is connected
+        await this.sendMessage('Bot connected.');
       },
     });
   }

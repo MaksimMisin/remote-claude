@@ -4,12 +4,23 @@
 
 import { TELEGRAM_MESSAGE_LIMIT } from '../shared/defaults.js';
 
-/** Strip tmux target suffix from session name for cleaner Telegram display.
- *  "remote-claude (remote-claude:2.0)" → "remote-claude" */
-export function cleanSessionName(session: { customName?: string; name: string }): string {
+/** Strip leading emoji prefix from tmux window name (same logic as web dashboard). */
+function stripEmojiPrefix(name: string): string {
+  return name.replace(/^[\p{Emoji}\p{Emoji_Presentation}\uFE0F]+\s*/u, '');
+}
+
+/** Get display name matching the web dashboard priority:
+ *  customName > windowName (emoji-stripped) > name (tmux-target-stripped) > id */
+export function getDisplayName(session: {
+  id: string;
+  name: string;
+  customName?: string;
+  windowName?: string;
+}): string {
   if (session.customName) return session.customName;
+  if (session.windowName) return stripEmojiPrefix(session.windowName);
   // Strip " (tmuxTarget)" suffix added by auto-discovery
-  return session.name.replace(/\s*\([^)]*:\d+\.\d+\)$/, '');
+  return session.name.replace(/\s*\([^)]*:\d+\.\d+\)$/, '') || session.id;
 }
 
 /** Escape <, >, & for safe embedding in Telegram HTML. */
@@ -104,6 +115,7 @@ export function formatSessionList(
   sessions: Array<{
     name: string;
     customName?: string;
+    windowName?: string;
     id: string;
     status: string;
     currentTool?: string;
@@ -115,7 +127,7 @@ export function formatSessionList(
 
   const lines = sessions.map((s) => {
     const emoji = STATUS_EMOJI[s.status] ?? '\u2B1C';
-    const displayName = s.customName || s.name;
+    const displayName = getDisplayName(s);
     let line = `${emoji} <b>${escapeHtml(displayName)}</b> \u2014 ${escapeHtml(s.status)}`;
     if (s.status === 'working' && s.currentTool) {
       line += ` (${escapeHtml(s.currentTool)})`;
