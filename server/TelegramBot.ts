@@ -65,6 +65,8 @@ export class TelegramBot {
   private createSession: TelegramBotConfig['createSession'];
   private capturePane: TelegramBotConfig['capturePane'];
   private wizardState: WizardState | null = null;
+  /** Per-session count of messages sent while Claude was working (queue depth estimate). */
+  private queueCounters = new Map<string, number>();
 
   constructor(config: TelegramBotConfig) {
     this.config = config;
@@ -343,7 +345,7 @@ export class TelegramBot {
         '/bind &lt;name&gt; \u2014 Set active session by name or ID\n' +
         '/status \u2014 Show active session details\n' +
         '/stop \u2014 Cancel current task (Ctrl+C)\n' +
-        '/close \u2014 Delete this topic (in a session topic)\n' +
+        '/close \u2014 Close session and delete topic\n' +
         '/help \u2014 This message\n\n' +
         '<b>Usage</b>\n\n' +
         (this.forumMode
@@ -1037,6 +1039,11 @@ export class TelegramBot {
     const isSlashCmd = text.startsWith('/');
     const tmuxTarget = session.tmuxTarget;
 
+    // Slash commands that open interactive TUI dialogs (need Escape to dismiss)
+    const INTERACTIVE_SLASH_CMDS = new Set(['/usage', '/status', '/config', '/settings']);
+    const cmdName = text.split(/\s/)[0].toLowerCase();
+    const isInteractiveSlash = isSlashCmd && INTERACTIVE_SLASH_CMDS.has(cmdName);
+
     // Capture pane before for slash command output diffing
     let paneBefore = '';
     if (isSlashCmd && tmuxTarget) {
@@ -1047,17 +1054,22 @@ export class TelegramBot {
       const sendStatus = await this.sendPrompt(sessionId, text);
       const name = fmt.getDisplayName(session);
 
-      // Status-aware feedback
+      // Status-aware feedback with queue position tracking
       let reply: string;
       if (isInterrupt) {
+        this.queueCounters.delete(sessionId);
         reply = this.forumMode
           ? '\u26A1 interrupted \u2192 sent'
           : `\u26A1 interrupted \u2192 sent to <b>${fmt.escapeHtml(name)}</b>`;
       } else if (sendStatus === 'working') {
+        const pos = (this.queueCounters.get(sessionId) || 0) + 1;
+        this.queueCounters.set(sessionId, pos);
+        const posLabel = pos > 1 ? ` #${pos}` : '';
         reply = this.forumMode
-          ? '\u23F3 queued (Claude is working)'
-          : `\u23F3 queued for <b>${fmt.escapeHtml(name)}</b> (working)`;
+          ? `\u23F3 queued${posLabel} (Claude is working)`
+          : `\u23F3 queued${posLabel} for <b>${fmt.escapeHtml(name)}</b>`;
       } else {
+        this.queueCounters.delete(sessionId);
         reply = this.forumMode
           ? '\u2192 sent'
           : `\u2192 sent to <b>${fmt.escapeHtml(name)}</b>`;
@@ -1091,6 +1103,11 @@ export class TelegramBot {
                 `<pre>${fmt.escapeHtml(snippet)}</pre>`,
                 { topicId: topicId ?? undefined, silent: true },
               );
+            }
+
+            // Auto-dismiss interactive TUI dialogs (e.g. /usage, /status, /config)
+            if (isInteractiveSlash) {
+              await this.sendKeys(sessionId, ['Escape']);
             }
           } catch (err) {
             console.error('[Telegram] Failed to capture slash command output:', err);
@@ -1240,6 +1257,11 @@ export class TelegramBot {
       ?.replace(/<!--rc:\w+:?[^>]*-->/g, '')
       .trim()
       .slice(0, 3500);
+
+    // Reset queue counter when session stops working
+    if (prevStatus === 'working' && session.status !== 'working') {
+      this.queueCounters.delete(session.id);
+    }
 
     // any -> offline (but not on first discovery): close the topic (preserves mapping).
     // Handle BEFORE ensureTopic to avoid creating/reopening a topic just to close it.

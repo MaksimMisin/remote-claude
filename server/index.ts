@@ -146,6 +146,10 @@ const sessionManager = new SessionManager(
   },
   (sessionId) => {
     broadcast({ type: 'session_removed', payload: { sessionId } });
+    // Notify Telegram to close/delete the topic for this removed session
+    if (telegramBot) {
+      telegramBot.onSessionRemoved(sessionId).catch(() => {});
+    }
   },
   (oldSessionId, newSessionId, newSession) => {
     // Transfer Telegram topic from old session to new session (auto-continue on same pane)
@@ -649,6 +653,7 @@ if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
     sendPrompt: (id, text) => sessionManager.sendPrompt(id, text),
     sendCancel: (id) => sessionManager.sendCancel(id),
     sendKeys: (id, keys) => sessionManager.sendKeys(id, keys),
+    closeSession: (id) => sessionManager.close(id),
     createSession: (name, cwd, flags) => sessionManager.create(name, cwd, flags),
     capturePane: (target, lines) => capturePane(target, lines),
   });
