@@ -13,8 +13,11 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 ## Commands
 - `npm run dev` -- Start server with hot reload (tsx watch)
 - `npm run start` -- Start server (production)
-- `npm run setup` -- Install hooks into Claude Code settings
+- `npm run setup` -- Install hooks, rc CLI, and generate auth token
 - `cd frontend && npm run build` -- Rebuild frontend after changes
+- `rc off` -- Pause hooks and kill server (working locally)
+- `rc on` -- Resume hooks (going remote)
+- `rc` -- Show current status
 
 ## Terminology
 - **Session** = a Claude Code instance (user-facing term in dashboard UI)
