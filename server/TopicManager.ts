@@ -86,13 +86,25 @@ export class TopicManager {
             `[Topics] Reopened topic ${existing.topicId} for session ${sessionId}`,
           );
         } catch (err) {
-          console.warn(
-            `[Topics] Failed to reopen topic ${existing.topicId}:`,
-            (err as Error).message || err,
-          );
+          const msg = (err as Error).message || String(err);
+          if (msg.includes('TOPIC_ID_INVALID')) {
+            // Topic was deleted from Telegram — remove stale entry and fall through to create new
+            console.log(`[Topics] Topic ${existing.topicId} no longer exists, will create new`);
+            delete this.store.topics[sessionId];
+            this.lastTitle.delete(sessionId);
+            this.save();
+            // Fall through to create a new topic below
+          } else {
+            console.warn(
+              `[Topics] Failed to reopen topic ${existing.topicId}:`, msg,
+            );
+            return existing.topicId;
+          }
         }
       }
-      return existing.topicId;
+      if (this.store.topics[sessionId]) {
+        return existing.topicId;
+      }
     }
 
     // Create a new forum topic
@@ -190,9 +202,17 @@ export class TopicManager {
         `[Topics] Closed topic ${entry.topicId} for session ${sessionId}`,
       );
     } catch (err) {
+      const msg = (err as Error).message || String(err);
+      // Topic was already deleted from Telegram — clean up our stale reference
+      if (msg.includes('TOPIC_ID_INVALID') || msg.includes('TOPIC_NOT_MODIFIED')) {
+        console.log(`[Topics] Topic ${entry.topicId} no longer exists, removing stale entry for session ${sessionId}`);
+        delete this.store.topics[sessionId];
+        this.lastTitle.delete(sessionId);
+        this.save();
+        return;
+      }
       console.warn(
-        `[Topics] Failed to close topic ${entry.topicId}:`,
-        (err as Error).message || err,
+        `[Topics] Failed to close topic ${entry.topicId}:`, msg,
       );
     }
   }
@@ -232,6 +252,25 @@ export class TopicManager {
     }
   }
 
+  /**
+   * Close topics for sessions that no longer exist.
+   * Called on startup to sync Telegram topics with active sessions.
+   */
+  async closeStaleTopics(activeSessionIds: Set<string>): Promise<void> {
+    const stale = Object.entries(this.store.topics).filter(
+      ([sessionId, entry]) => !entry.closed && !activeSessionIds.has(sessionId),
+    );
+    if (stale.length === 0) {
+      console.log('[Topics] No stale topics to close');
+      return;
+    }
+    console.log(`[Topics] Closing ${stale.length} stale topic(s)...`);
+    for (const [sessionId, entry] of stale) {
+      console.log(`[Topics] Closing stale topic ${entry.topicId} "${entry.name}" (session ${sessionId})`);
+      await this.closeTopic(sessionId);
+    }
+  }
+
   /** Last title set per topic — avoids redundant API calls. */
   private lastTitle = new Map<string, string>();
 
@@ -263,9 +302,16 @@ export class TopicManager {
     try {
       await this.api.editForumTopic(this.chatId, entry.topicId, { name: title });
     } catch (err) {
+      const msg = (err as Error).message || String(err);
+      if (msg.includes('TOPIC_ID_INVALID')) {
+        console.log(`[Topics] Topic ${entry.topicId} no longer exists, removing stale entry for session ${sessionId}`);
+        delete this.store.topics[sessionId];
+        this.lastTitle.delete(sessionId);
+        this.save();
+        return;
+      }
       console.warn(
-        `[Topics] Failed to update topic title ${entry.topicId}:`,
-        (err as Error).message || err,
+        `[Topics] Failed to update topic title ${entry.topicId}:`, msg,
       );
     }
   }
