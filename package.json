@@ -4,12 +4,13 @@
   "description": "Monitor and control Claude Code sessions from your phone",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch server/index.ts",
-    "start": "tsx server/index.ts",
+    "dev": "tsx watch --env-file=.env server/index.ts",
+    "start": "tsx --env-file=.env server/index.ts",
     "setup": "tsx bin/setup.ts"
   },
   "dependencies": {
     "chokidar": "^4.0.0",
+    "grammy": "^1.39.3",
     "web-push": "^3.6.7",
     "ws": "^8.18.0"
   },
