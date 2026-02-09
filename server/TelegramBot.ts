@@ -639,6 +639,36 @@ export class TelegramBot {
     await this.topicManager.deleteTopic(sessionId);
   }
 
+  /**
+   * Called when a session is replaced on the same pane (e.g., auto-continue).
+   * Transfers the old session's topic to the new session so events stay in
+   * the same Telegram topic.
+   */
+  async onSessionReplaced(oldSessionId: string, newSessionId: string, session: ManagedSession): Promise<void> {
+    if (!this.forumMode || !this.topicManager) return;
+
+    const transferred = this.topicManager.transferTopic(oldSessionId, newSessionId);
+    if (transferred) {
+      // Flush any pending event buffer under the old session ID
+      const oldBuf = this.eventBuffer.get(oldSessionId);
+      if (oldBuf && oldBuf.length > 0) {
+        const newBuf = this.eventBuffer.get(newSessionId) || [];
+        newBuf.push(...oldBuf);
+        this.eventBuffer.set(newSessionId, newBuf);
+        this.eventBuffer.delete(oldSessionId);
+      }
+      // Transfer flush timer
+      const oldTimer = this.eventFlushTimers.get(oldSessionId);
+      if (oldTimer) {
+        clearTimeout(oldTimer);
+        this.eventFlushTimers.delete(oldSessionId);
+      }
+      // Update topic title with new session info
+      const name = fmt.getDisplayName(session);
+      await this.topicManager.updateTopicTitle(newSessionId, session.status, name);
+    }
+  }
+
   // ---- Event streaming to topics ----
 
   /**

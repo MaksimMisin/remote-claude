@@ -147,6 +147,20 @@ const sessionManager = new SessionManager(
   (sessionId) => {
     broadcast({ type: 'session_removed', payload: { sessionId } });
   },
+  (oldSessionId, newSessionId, newSession) => {
+    // Transfer Telegram topic from old session to new session (auto-continue on same pane)
+    if (telegramBot) {
+      telegramBot.onSessionReplaced(oldSessionId, newSessionId, newSession).catch((err) => {
+        console.error('[Telegram] Topic transfer error:', err);
+      });
+    }
+    // Transfer prevStatuses tracking
+    const oldStatus = prevStatuses.get(oldSessionId);
+    if (oldStatus) {
+      prevStatuses.set(newSessionId, oldStatus);
+      prevStatuses.delete(oldSessionId);
+    }
+  },
 );
 
 // --- HTTP helpers ---

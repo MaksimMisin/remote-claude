@@ -127,6 +127,21 @@ export class TopicManager {
     return undefined;
   }
 
+  /** Transfer a topic from one session to another (e.g., auto-continue on same pane). */
+  transferTopic(fromSessionId: string, toSessionId: string): boolean {
+    const entry = this.store.topics[fromSessionId];
+    if (!entry) return false;
+    // Move the entry to the new key
+    this.store.topics[toSessionId] = entry;
+    delete this.store.topics[fromSessionId];
+    this.lastTitle.delete(fromSessionId);
+    this.save();
+    console.log(
+      `[Topics] Transferred topic ${entry.topicId} from session ${fromSessionId} → ${toSessionId}`,
+    );
+    return true;
+  }
+
   /** Close a forum topic and mark it closed in the store. */
   async closeTopic(sessionId: string): Promise<void> {
     const entry = this.store.topics[sessionId];
