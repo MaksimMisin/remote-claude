@@ -5,21 +5,33 @@ Read `RESEARCH.md` first for the full competitive landscape and UX analysis.
 
 ---
 
-## Current State (v1: DM Mode)
+## Core Principle: Telegram is the PRIMARY Remote Interface
 
-Phase 1 is implemented and working:
-- grammY bot with long-polling
+**Telegram MUST have at least the same level of detail as the web dashboard,
+and should aim to have MORE.** Telegram is frankly a better environment for
+remote control — it has native notifications, forum topics, inline keyboards,
+reactions, expandable blockquotes, and persistent chat history. The web
+dashboard is a fallback for when Telegram isn't configured.
+
+Both channels receive the same event stream from the server. Telegram formats
+events for chat (batched, HTML-formatted) while the web dashboard formats them
+for a scrollable React UI. Telegram should never be a stripped-down version —
+it should be the richer, more capable interface.
+
+---
+
+## Current State
+
+Implemented and working:
+- Forum topics mode: one topic per session, auto-created
+- **Real-time event streaming**: tool activity + assistant text batched per 3s
 - Status notifications: working->idle, working->waiting, any->offline
 - Inline keyboard for permission approve/reject
 - `/sessions`, `/bind`, `/status`, `/help` commands
-- Text messages delivered as prompts to the bound session
-- Auto-bind on permission events
+- Text messages delivered as prompts to session topics
+- Topic title updated with status emoji prefix
+- DM mode fallback for non-forum chats
 - HTML formatting via `telegram-format.ts`
-
-**What's wrong with v1:** All sessions share one DM chat. With 3+ concurrent
-sessions, notifications interleave into an unreadable stream. The bound session
-is invisible state. Permission buttons get buried. See RESEARCH.md "Verdict"
-section -- no project has solved single-chat multi-session elegantly.
 
 ---
 
@@ -28,33 +40,33 @@ section -- no project has solved single-chat multi-session elegantly.
 ```
 Claude Code (in tmux)
   |
-  |-- Hook fires (instant) --> Server --> SessionManager
-  |                                         |
-  |                                         |--> WebSocket (dashboard, existing)
-  |                                         |--> TelegramBot (status alerts)
-  |
-  |-- JSONL transcript (append-only file)
-        |
-        `--> TranscriptPoller (future) --> TelegramBot (rich content messages)
+  |-- Hook fires (instant) --> Server --> EventProcessor
+                                            |
+                                            |--> WebSocket broadcast (dashboard)
+                                            |--> TelegramBot.onEvent() (event stream)
+                                            |--> SessionManager.handleEvent()
+                                                   |
+                                                   |--> TelegramBot.onStatusChange()
 ```
 
 ### Data flow: outbound (Claude -> Telegram)
 
-**Status alerts (from hooks, instant):**
+**Event streaming (from hooks, instant, batched per 3s):**
 ```
-Hook event -> SessionManager.updateSession() -> TelegramBot.onStatusChange()
-  - working -> idle:    "Session X finished. [marker message if any]"
-  - working -> waiting: "Session X needs attention: [permission details]"
-  - any -> offline:     "Session X went offline"
+Hook event -> EventProcessor -> TelegramBot.onEvent()
+  - pre_tool_use:       Tool icon + description + assistant text snippet
+  - stop:               ✅ Marker message + response text (expandable)
+  - user_prompt_submit:  💬 User prompt text
+  -> Buffered per session, flushed as one message every 3 seconds
+  -> Flushed immediately on status transition (leaving working state)
 ```
 
-**Rich content (from JSONL, future -- 2s latency):**
+**Status alerts (from session manager, instant):**
 ```
-TranscriptPoller reads new JSONL lines -> parses entries -> TelegramBot.onContent()
-  - Assistant text:  full response (split if > 4096 chars)
-  - Tool use:        "Read(file.py)" / "Bash(npm test)" / "Edit(main.py)"
-  - Tool result:     edit tool_use message with result summary + expandable detail
-  - Thinking:        expandable blockquote
+SessionManager.updateSession() -> TelegramBot.onStatusChange()
+  - working -> idle:    "Session X finished. [marker message if any]"
+  - working -> waiting: "Session X needs attention: [permission details]"
+  - any -> offline:     Topic deleted
 ```
 
 ### Data flow: inbound (Telegram -> Claude)
@@ -274,47 +286,40 @@ If `TELEGRAM_BOT_TOKEN` is not set:
 
 ## Implementation Plan
 
-### Phase 1: Hooks-only DM mode -- DONE
+### Phase 1: DM mode -- DONE
 
 Status notifications, inline keyboards, basic commands, prompt delivery.
 
-### Phase 2: Forum topics mode
+### Phase 2: Forum topics mode -- DONE
 
-1. Add `createForumTopic` / topic management to TelegramBot
-2. Store `sessionId -> topicId` mapping (persisted to disk)
-3. Route outbound messages by `message_thread_id`
-4. Route inbound messages by `message_thread_id -> sessionId`
-5. Auto-create topics for new sessions
-6. Pinned status message in General topic
-7. DM fallback when not in a group
+Auto-created topics per session, topic lifecycle, status emoji in titles,
+prompt routing by topic, topic deletion on offline.
 
-### Phase 3: UX polish
+### Phase 3: Event streaming -- DONE
 
-- Silent vs loud notifications
-- Self-cleaning permission buttons
-- ACK emoji reactions
-- Expandable blockquotes
+Real-time event streaming to forum topics via hook-based events:
+- pre_tool_use events: tool icon + description + assistant reasoning
+- stop events: marker message + response text (expandable blockquote)
+- user_prompt_submit: prompt text
+- Batched per 3 seconds, flushed immediately on status transition
+- Uses formatEventLine() for consistent tool formatting
+
+### Phase 4: UX polish
+
+- Silent vs loud notifications (disable_notification)
+- ACK emoji reactions on prompt delivery
 - Persistent reply keyboard (DM mode only)
 
-### Phase 4: Rich content via JSONL polling
+### Phase 5: Telegram-native enhancements (beyond web dashboard)
 
-Add the content layer (ccbot-inspired):
-
-1. Extract `transcript_path` from hook events, store per-session
-2. Create `TranscriptPoller.ts` (byte-offset JSONL reader)
-3. Parse transcript entries (text, tool_use, tool_result, thinking)
-4. Send formatted content to Telegram
-5. Edit tool_use messages with results
-6. Expandable blockquotes for thinking and long outputs
-7. Message merging (consecutive texts within 3800 chars)
-8. Persist transcript offsets for crash recovery
-
-### Phase 5: Advanced features (future)
-
-- Message queuing with `!` interrupt (linuz90 pattern)
+Telegram should EXCEED the web dashboard's capabilities:
+- Voice message transcription for prompt delivery
+- Message queuing with `!` interrupt
 - Concat mode for complex prompts on mobile
-- Voice message transcription
 - Topic auto-close after offline timeout
+- Rich tool result previews (edit diffs, command output)
+- Thinking block streaming via expandable blockquotes
+- Image/screenshot forwarding from browser tools
 
 ---
 
@@ -341,16 +346,8 @@ Add the content layer (ccbot-inspired):
 
 ## Files
 
-### Existing (v1)
-- `server/TelegramBot.ts` -- grammY bot, commands, callbacks, notifications
-- `server/telegram-format.ts` -- HTML formatting, message splitting, templates
+- `server/TelegramBot.ts` -- grammY bot, commands, callbacks, event streaming, notifications
+- `server/telegram-format.ts` -- HTML formatting, event lines, message splitting, templates
+- `server/TopicManager.ts` -- topic lifecycle, sessionId<->topicId mapping, persistence
 - `shared/defaults.ts` -- `TELEGRAM_MESSAGE_LIMIT` constant
-
-### To create (v2)
-- `server/TopicManager.ts` -- topic lifecycle, sessionId<->topicId mapping
-- `server/TranscriptPoller.ts` -- JSONL reader (phase 4)
-
-### To modify (v2)
-- `server/TelegramBot.ts` -- add topic routing, pinned message, DM fallback
-- `server/telegram-format.ts` -- pinned status message template
-- `server/index.ts` -- pass forum mode config to TelegramBot
+- `server/index.ts` -- wires EventProcessor → TelegramBot.onEvent() and SessionManager → onStatusChange()

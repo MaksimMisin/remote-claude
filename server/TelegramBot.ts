@@ -562,16 +562,20 @@ export class TelegramBot {
       );
     }
 
-    // any -> offline (but not on first discovery)
+    // any -> offline (but not on first discovery): delete the topic entirely
     if (
       session.status === 'offline' &&
       prevStatus !== 'offline' &&
       prevStatus !== undefined
     ) {
-      await this.sendMessage(
-        fmt.formatSessionOffline(name),
-        { topicId, silent: true },
-      );
+      if (this.forumMode && this.topicManager) {
+        await this.topicManager.deleteTopic(session.id);
+      } else {
+        await this.sendMessage(
+          fmt.formatSessionOffline(name),
+          { topicId, silent: true },
+        );
+      }
     }
 
   }
@@ -631,21 +635,8 @@ export class TelegramBot {
     const topicId = this.topicManager.getTopicId(sessionId);
     if (!topicId) return;
 
-    const name = session ? fmt.getDisplayName(session) : sessionId;
-
-    // Calculate duration
-    const duration = session?.createdAt
-      ? fmt.formatDuration(Date.now() - session.createdAt)
-      : '?';
-
-    // Close the topic
-    await this.topicManager.closeTopic(sessionId);
-
-    // Post brief summary to General (no topicId = General)
-    await this.sendMessage(
-      fmt.formatSessionClosed(name, duration),
-      { silent: true },
-    );
+    // Delete the topic entirely
+    await this.topicManager.deleteTopic(sessionId);
   }
 
   // ---- Event streaming to topics ----
@@ -654,9 +645,65 @@ export class TelegramBot {
    * Called by the server for each raw event. Buffers events and flushes
    * them as batched messages every 3 seconds per session topic.
    */
-  async onEvent(_event: ClaudeEvent, _session: ManagedSession): Promise<void> {
-    // Intentionally disabled — only status changes (idle, waiting, question)
-    // trigger Telegram notifications. Tool-use streaming was too noisy.
+  async onEvent(event: ClaudeEvent, session: ManagedSession): Promise<void> {
+    // Only stream in forum mode (topics give per-session context)
+    if (!this.forumMode || !this.topicManager) return;
+
+    let line: string | undefined;
+
+    if (event.type === 'pre_tool_use' && event.tool) {
+      // Tool activity — matches web dashboard event feed
+      line = fmt.formatEventLine(event.tool, event.toolInput);
+      // Include Claude's reasoning as context (like web dashboard's grey text)
+      if (event.assistantText) {
+        const cleaned = event.assistantText.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim();
+        if (cleaned) {
+          const snippet = cleaned.length > 300 ? cleaned.slice(0, 300) + '...' : cleaned;
+          line += `\n   <i>${fmt.escapeHtml(snippet)}</i>`;
+        }
+      }
+    } else if (event.type === 'stop' && event.assistantText) {
+      // Claude's response — skip silent markers
+      if (event.marker?.category === 'silent') return;
+      const cleaned = event.assistantText.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim();
+      if (cleaned) {
+        const desc = event.marker?.message || 'Response';
+        const snippet = cleaned.length > 500 ? cleaned.slice(0, 500) + '...' : cleaned;
+        // Show marker as title, full text as expandable content
+        if (cleaned.length > 100) {
+          line = `✅ <b>${fmt.escapeHtml(desc)}</b>\n<blockquote expandable>${fmt.escapeHtml(snippet)}</blockquote>`;
+        } else {
+          line = `✅ ${fmt.escapeHtml(cleaned)}`;
+        }
+      }
+    } else if (event.type === 'user_prompt_submit' && event.assistantText) {
+      // User prompt — show what was sent
+      const text = event.assistantText.trim();
+      if (text) {
+        const snippet = text.length > 200 ? text.slice(0, 200) + '...' : text;
+        line = `💬 <i>${fmt.escapeHtml(snippet)}</i>`;
+      }
+    }
+
+    if (!line) return;
+
+    // Add timestamp prefix
+    const time = new Date(event.timestamp).toLocaleTimeString('en-US', {
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+    line = `<code>${time}</code> ${line}`;
+
+    // Buffer per session
+    const buf = this.eventBuffer.get(session.id) || [];
+    buf.push(line);
+    this.eventBuffer.set(session.id, buf);
+
+    // Schedule 3-second batch flush
+    if (!this.eventFlushTimers.has(session.id)) {
+      this.eventFlushTimers.set(session.id, setTimeout(() => {
+        this.flushEventBuffer(session.id);
+      }, 3000));
+    }
   }
 
   /** Flush the event buffer for a session — send all collected lines as one message. */
@@ -697,6 +744,8 @@ export class TelegramBot {
           this.forumMode = true;
           this.topicManager = new TopicManager(this.chatId, this.bot.api);
           console.log('[Telegram] Forum mode enabled');
+          // Clean up any leftover closed topics from previous runs
+          this.topicManager.deleteClosedTopics().catch(() => {});
         } else if (forumSetting === 'true') {
           console.warn('[Telegram] forumMode=true but chat is not a forum group');
         }

@@ -96,6 +96,9 @@ export function formatEventLine(
       return `\uD83D\uDCDD Writing <code>${escapeHtml(name)}</code>`;
     }
     case 'Bash': {
+      // Prefer description (matches web dashboard behavior)
+      const desc = String(toolInput?.description ?? '');
+      if (desc) return `\uD83D\uDCBB ${escapeHtml(desc)}`;
       const cmd = String(toolInput?.command ?? '');
       const truncated = cmd.length > 120 ? cmd.slice(0, 120) + '...' : cmd;
       return `\uD83D\uDCBB <code>$ ${escapeHtml(truncated)}</code>`;
@@ -191,11 +194,6 @@ export function formatDuration(ms: number): string {
   const mins = totalMin % 60;
   if (hours === 0) return `${mins}m`;
   return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-}
-
-/** Format a "session closed" summary for General topic. */
-export function formatSessionClosed(sessionName: string, duration: string): string {
-  return `\uD83D\uDCCB <b>${escapeHtml(sessionName)}</b> closed (${escapeHtml(duration)})`;
 }
 
 /** Format a list of sessions for the /sessions command. */
