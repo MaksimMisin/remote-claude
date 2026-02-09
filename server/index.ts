@@ -80,6 +80,16 @@ const eventProcessor = new EventProcessor((event: ClaudeEvent) => {
 
   // Update session status based on event
   sessionManager.handleEvent(event);
+
+  // Stream events to Telegram topics
+  if (telegramBot) {
+    const session = sessionManager.findByEvent(event);
+    if (session) {
+      telegramBot.onEvent(event, session).catch((err) => {
+        console.error('[Telegram] Event streaming error:', err);
+      });
+    }
+  }
 });
 
 /** Track previous session statuses for notification transitions */
@@ -89,6 +99,7 @@ const prevStatuses = new Map<string, string>();
 
 const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const TELEGRAM_FORUM_MODE = (process.env.TELEGRAM_FORUM_MODE || 'auto') as 'auto' | 'true' | 'false';
 
 let telegramBot: TelegramBot | null = null;
 
@@ -612,6 +623,7 @@ if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
   telegramBot = new TelegramBot({
     token: TELEGRAM_BOT_TOKEN,
     chatId: TELEGRAM_CHAT_ID,
+    forumMode: TELEGRAM_FORUM_MODE,
     getSessions: () => sessionManager.list(),
     getSession: (id) => sessionManager.get(id),
     sendPrompt: (id, text) => sessionManager.sendPrompt(id, text),

@@ -19,3 +19,5 @@ export const TMUX_SESSION_NAME = 'remote-claude';
 
 // Telegram
 export const TELEGRAM_MESSAGE_LIMIT = 4096;
+export const TELEGRAM_TOPICS_FILE = join(DATA_DIR, 'telegram-topics.json');
+export const TELEGRAM_GENERAL_TOPIC_ID = 1;
