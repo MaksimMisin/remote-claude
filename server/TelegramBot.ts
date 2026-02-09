@@ -6,9 +6,16 @@
 
 import { Bot, InlineKeyboard, type Context } from 'grammy';
 import type { ClaudeEvent, ManagedSession, SessionStatus } from '../shared/types.js';
-import { TELEGRAM_GENERAL_TOPIC_ID } from '../shared/defaults.js';
+import { TELEGRAM_GENERAL_TOPIC_ID, TELEGRAM_MESSAGE_LIMIT } from '../shared/defaults.js';
 import { TopicManager } from './TopicManager.js';
 import * as fmt from './telegram-format.js';
+import { existsSync, readdirSync, writeFileSync, mkdirSync } from 'node:fs';
+import { basename, resolve, join } from 'node:path';
+import { homedir } from 'node:os';
+import { randomBytes } from 'node:crypto';
+import { DATA_DIR } from '../shared/defaults.js';
+
+const UPLOADS_DIR = join(DATA_DIR, 'uploads');
 
 // --- Config interface ---
 
@@ -20,6 +27,18 @@ export interface TelegramBotConfig {
   getSession: (id: string) => ManagedSession | undefined;
   sendPrompt: (sessionId: string, text: string) => Promise<void>;
   sendKeys: (sessionId: string, keys: string[]) => Promise<void>;
+  createSession: (name: string, cwd: string, flags?: string) => Promise<ManagedSession>;
+}
+
+// --- Wizard state for /new interactive flow ---
+
+interface WizardState {
+  /** Message ID of the wizard keyboard message (for editing) */
+  messageId: number;
+  /** Current browse path (null = showing recent dirs) */
+  browsePath: string | null;
+  /** Thread/topic ID where the wizard was started */
+  threadId?: number;
 }
 
 // --- TelegramBot class ---
@@ -39,6 +58,8 @@ export class TelegramBot {
   private getSession: TelegramBotConfig['getSession'];
   private sendPrompt: TelegramBotConfig['sendPrompt'];
   private sendKeys: TelegramBotConfig['sendKeys'];
+  private createSession: TelegramBotConfig['createSession'];
+  private wizardState: WizardState | null = null;
 
   constructor(config: TelegramBotConfig) {
     this.config = config;
@@ -47,6 +68,7 @@ export class TelegramBot {
     this.getSession = config.getSession;
     this.sendPrompt = config.sendPrompt;
     this.sendKeys = config.sendKeys;
+    this.createSession = config.createSession;
 
     this.bot = new Bot(config.token);
 
@@ -61,11 +83,29 @@ export class TelegramBot {
       console.error('[Telegram] Bot error:', err.message || err);
     });
 
-    // Command handlers
+    // In forum mode session topics, intercept /commands and forward them
+    // as prompts to Claude Code (e.g. /compact, /status, /clear).
+    // Without this, grammY's command handlers would eat them.
+    this.bot.use(async (ctx, next) => {
+      if (
+        this.forumMode && this.topicManager &&
+        ctx.message?.text?.startsWith('/') &&
+        ctx.message.message_thread_id &&
+        ctx.message.message_thread_id !== TELEGRAM_GENERAL_TOPIC_ID &&
+        this.topicManager.getSessionId(ctx.message.message_thread_id)
+      ) {
+        await this.handleTextMessage(ctx);
+        return;
+      }
+      await next();
+    });
+
+    // Command handlers (only fire in General topic / DM mode after middleware above)
     this.bot.command('start', (ctx) => this.handleStart(ctx));
     this.bot.command('sessions', (ctx) => this.handleSessions(ctx));
     this.bot.command('bind', (ctx) => this.handleBind(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
+    this.bot.command('new', (ctx) => this.handleNew(ctx));
     this.bot.command('help', (ctx) => this.handleHelp(ctx));
 
     // Callback query handler (inline keyboard button presses)
@@ -73,6 +113,10 @@ export class TelegramBot {
 
     // Text message handler (prompt delivery)
     this.bot.on('message:text', (ctx) => this.handleTextMessage(ctx));
+
+    // Photo and document handlers (file upload)
+    this.bot.on('message:photo', (ctx) => this.handlePhotoMessage(ctx));
+    this.bot.on('message:document', (ctx) => this.handleDocumentMessage(ctx));
   }
 
   // ---- Authorization guard ----
@@ -99,6 +143,7 @@ export class TelegramBot {
         'and lets you send prompts and approve permissions.\n\n' +
         'Commands:\n' +
         '/sessions \u2014 List sessions\n' +
+        '/new \u2014 Create a new session\n' +
         '/bind <name> \u2014 Set active session\n' +
         '/status \u2014 Active session status\n' +
         '/help \u2014 Command reference\n\n' +
@@ -209,11 +254,21 @@ export class TelegramBot {
               '',
               `Status: ${fmt.escapeHtml(session.status)}`,
             ];
-            if (session.cwd) lines.push(`Directory: <code>${fmt.escapeHtml(session.cwd)}</code>`);
-            if (session.gitBranch) lines.push(`Branch: <code>${fmt.escapeHtml(session.gitBranch)}</code>${session.gitDirty ? ' (dirty)' : ''}`);
-            if (session.currentTool) lines.push(`Tool: <code>${fmt.escapeHtml(session.currentTool)}</code>`);
-            if (session.lastMarker) lines.push(`Last marker: ${fmt.escapeHtml(session.lastMarker.category)} \u2014 ${fmt.escapeHtml(session.lastMarker.message)}`);
-            if (session.totalTokens != null) lines.push(`Tokens: ${session.totalTokens.toLocaleString()}`);
+            if (session.cwd) {
+              const dir = session.cwd.replace(/^\/Users\/\w+\//, '~/');
+              lines.push(`📁 <code>${fmt.escapeHtml(dir)}</code>`);
+            }
+            if (session.gitBranch) lines.push(`🌿 <code>${fmt.escapeHtml(session.gitBranch)}</code>${session.gitDirty ? ' (dirty)' : ''}`);
+            if (session.totalTokens != null) lines.push(`🔢 ${session.totalTokens.toLocaleString()} tokens`);
+            if (session.currentTool) lines.push(`🔧 <code>${fmt.escapeHtml(session.currentTool)}</code>`);
+            // Show initial prompt from topic metadata
+            const initialPrompt = this.topicManager.getInitialPrompt(sessionId);
+            if (initialPrompt) {
+              const snippet = initialPrompt.length > 300
+                ? initialPrompt.slice(0, 300) + '...'
+                : initialPrompt;
+              lines.push('', `💬 <i>${fmt.escapeHtml(snippet)}</i>`);
+            }
             await ctx.reply(lines.join('\n'), { parse_mode: 'HTML', message_thread_id: threadId });
             return;
           }
@@ -271,6 +326,8 @@ export class TelegramBot {
     await ctx.reply(
       '<b>Commands</b>\n\n' +
         '/sessions \u2014 List sessions and bind to one\n' +
+        '/new \u2014 Create a new session (interactive)\n' +
+        '/new &lt;path&gt; \u2014 Create session at path\n' +
         '/bind &lt;name&gt; \u2014 Set active session by name or ID\n' +
         '/status \u2014 Show active session details\n' +
         '/help \u2014 This message\n\n' +
@@ -286,92 +343,600 @@ export class TelegramBot {
     );
   }
 
-  // ---- Text message handler ----
+  // ---- /new command: create session ----
 
-  private async handleTextMessage(ctx: Context): Promise<void> {
+  private async handleNew(ctx: Context): Promise<void> {
     if (!this.isAuthorized(ctx)) return;
-    const text = ctx.message?.text;
-    if (!text) return;
 
-    // Forum mode: route by topic
+    const threadId = ctx.message?.message_thread_id;
+    const text = ctx.message?.text ?? '';
+    const args = text.replace(/^\/new\s*/i, '').trim();
+
+    if (args) {
+      // Quick create mode: /new <path> [--chrome]
+      await this.handleNewQuick(ctx, args, threadId);
+    } else {
+      // Interactive wizard
+      await this.startWizard(ctx, threadId);
+    }
+  }
+
+  /** Quick create: resolve path and create immediately. */
+  private async handleNewQuick(ctx: Context, args: string, threadId?: number): Promise<void> {
+    const hasChrome = /\s+--chrome\b/.test(args);
+    const pathArg = args.replace(/\s+--chrome\b/, '').trim();
+
+    const resolved = this.resolveNewPath(pathArg);
+    if (!resolved) {
+      await ctx.reply(
+        `Could not resolve path: <code>${fmt.escapeHtml(pathArg)}</code>\n\n` +
+          'Usage:\n' +
+          '<code>/new ~/code/myproject</code>\n' +
+          '<code>/new myproject</code> (matches recent dirs)\n' +
+          '<code>/new ~/code/myproject --chrome</code>',
+        { parse_mode: 'HTML', ...(threadId ? { message_thread_id: threadId } : {}) },
+      );
+      return;
+    }
+
+    const flags = hasChrome ? '--chrome' : undefined;
+    await this.createAndNotify(resolved, flags, threadId);
+  }
+
+  /** Resolve a path argument to an absolute directory path. */
+  private resolveNewPath(pathArg: string): string | null {
+    const home = homedir();
+
+    // Absolute path
+    if (pathArg.startsWith('/')) {
+      return existsSync(pathArg) ? pathArg : null;
+    }
+
+    // Tilde expansion
+    if (pathArg.startsWith('~/') || pathArg === '~') {
+      const expanded = pathArg === '~' ? home : join(home, pathArg.slice(2));
+      return existsSync(expanded) ? expanded : null;
+    }
+
+    // Try matching against recent session dirs
+    const recentDirs = this.getRecentDirs();
+
+    // Exact basename match
+    const exactMatch = recentDirs.find((d) => basename(d) === pathArg);
+    if (exactMatch) return exactMatch;
+
+    // Partial basename match (case-insensitive)
+    const lower = pathArg.toLowerCase();
+    const partialMatch = recentDirs.find((d) => basename(d).toLowerCase().includes(lower));
+    if (partialMatch) return partialMatch;
+
+    // Try ~/pathArg as a directory
+    const asHome = join(home, pathArg);
+    if (existsSync(asHome)) return asHome;
+
+    return null;
+  }
+
+  /** Get unique recent working directories from sessions. */
+  private getRecentDirs(): string[] {
+    const cwds = new Set<string>();
+    for (const session of this.getSessions()) {
+      if (session.cwd) cwds.add(session.cwd);
+    }
+    return Array.from(cwds);
+  }
+
+  /** Start the interactive wizard: show recent dirs as buttons. */
+  private async startWizard(ctx: Context, threadId?: number): Promise<void> {
+    const recentDirs = this.getRecentDirs();
+    const keyboard = this.buildRecentDirsKeyboard(recentDirs);
+
+    const text = recentDirs.length > 0
+      ? '<b>Create Session</b>\n\nSelect a directory or browse:'
+      : '<b>Create Session</b>\n\nNo recent directories. Browse to select:';
+
+    const msg = await ctx.reply(text, {
+      parse_mode: 'HTML',
+      reply_markup: keyboard,
+      ...(threadId ? { message_thread_id: threadId } : {}),
+    });
+
+    this.wizardState = {
+      messageId: msg.message_id,
+      browsePath: null,
+      threadId,
+    };
+  }
+
+  /** Build keyboard with recent dirs: each row has [dirname] [dirname + chrome]. */
+  private buildRecentDirsKeyboard(dirs: string[]): InlineKeyboard {
+    const keyboard = new InlineKeyboard();
+    for (let i = 0; i < dirs.length && i < 8; i++) {
+      const name = basename(dirs[i]);
+      keyboard
+        .text(name, `nw:r:${i}`)
+        .text(`${name} + chrome`, `nw:rc:${i}`)
+        .row();
+    }
+    keyboard.text('📂 Browse...', 'nw:browse').text('❌ Cancel', 'nw:cancel').row();
+    return keyboard;
+  }
+
+  /** Build keyboard for browsing a directory. */
+  private buildBrowseKeyboard(dirPath: string): InlineKeyboard {
+    const keyboard = new InlineKeyboard();
+
+    try {
+      const entries = readdirSync(dirPath, { withFileTypes: true });
+      const subdirs = entries
+        .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+        .map((e) => e.name)
+        .sort();
+
+      for (let i = 0; i < subdirs.length && i < 10; i++) {
+        keyboard.text(`📁 ${subdirs[i]}`, `nw:s:${i}`).row();
+      }
+      if (subdirs.length > 10) {
+        keyboard.text(`... ${subdirs.length - 10} more`, 'nw:noop').row();
+      }
+    } catch {
+      keyboard.text('⚠️ Cannot read directory', 'nw:noop').row();
+    }
+
+    keyboard
+      .text('⬆️ Up', 'nw:up')
+      .text('✅ Create here', 'nw:here')
+      .row()
+      .text('✅ + Chrome', 'nw:herec')
+      .text('❌ Cancel', 'nw:cancel')
+      .row();
+
+    return keyboard;
+  }
+
+  /** Build a t.me link to a forum topic in this chat. */
+  private topicLink(topicId: number): string {
+    // Private group chat IDs look like -100XXXXXXXXXX; strip -100 prefix for the t.me/c/ URL
+    const internalId = this.chatId.replace(/^-100/, '');
+    return `https://t.me/c/${internalId}/${topicId}`;
+  }
+
+  /** Create a session and send confirmation. */
+  private async createAndNotify(cwd: string, flags?: string, threadId?: number): Promise<void> {
+    const name = basename(cwd);
+    try {
+      const session = await this.createSession(name, cwd, flags);
+      const displayName = fmt.getDisplayName(session);
+      const chromeNote = flags?.includes('--chrome') ? ' (with Chrome)' : '';
+
+      // In forum mode, eagerly create the topic so we can link to it
+      let topicLink = '';
+      if (this.forumMode && this.topicManager) {
+        const topicId = await this.topicManager.ensureTopic(session.id, displayName);
+        if (topicId) {
+          topicLink = `\n<a href="${this.topicLink(topicId)}">Open topic</a>`;
+        }
+      }
+
+      await this.bot.api.sendMessage(
+        this.chatId,
+        `✅ Created <b>${fmt.escapeHtml(displayName)}</b>${chromeNote}\n` +
+          `📁 <code>${fmt.escapeHtml(cwd)}</code>${topicLink}`,
+        {
+          parse_mode: 'HTML',
+          ...(threadId ? { message_thread_id: threadId } : {}),
+        },
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[Telegram] Failed to create session:', message);
+      await this.bot.api.sendMessage(
+        this.chatId,
+        `❌ Failed to create session: ${fmt.escapeHtml(message)}`,
+        {
+          parse_mode: 'HTML',
+          ...(threadId ? { message_thread_id: threadId } : {}),
+        },
+      );
+    }
+  }
+
+  /** Edit the wizard message, or send a new one if editing fails. */
+  private async editWizardMessage(text: string, keyboard: InlineKeyboard): Promise<void> {
+    if (!this.wizardState) return;
+    try {
+      await this.bot.api.editMessageText(
+        this.chatId,
+        this.wizardState.messageId,
+        text,
+        { parse_mode: 'HTML', reply_markup: keyboard },
+      );
+    } catch {
+      // Message may be too old to edit — send a new one
+      const msg = await this.bot.api.sendMessage(this.chatId, text, {
+        parse_mode: 'HTML',
+        reply_markup: keyboard,
+        ...(this.wizardState.threadId ? { message_thread_id: this.wizardState.threadId } : {}),
+      });
+      this.wizardState.messageId = msg.message_id;
+    }
+  }
+
+  /** Handle all wizard callback queries (nw: prefix). */
+  private async handleWizardCallback(ctx: Context, data: string): Promise<void> {
+    const parts = data.split(':');
+    const action = parts[1]; // r, rc, browse, s, up, here, herec, cancel
+    const index = parts[2] ? parseInt(parts[2], 10) : 0;
+
+    try {
+      switch (action) {
+        case 'r':
+        case 'rc': {
+          // Create from recent dir
+          const recentDirs = this.getRecentDirs();
+          if (index >= recentDirs.length) {
+            await ctx.answerCallbackQuery({ text: 'Directory no longer available' });
+            return;
+          }
+          const dir = recentDirs[index];
+          const flags = action === 'rc' ? '--chrome' : undefined;
+          const threadId = this.wizardState?.threadId;
+          await ctx.answerCallbackQuery({ text: `Creating in ${basename(dir)}...` });
+          this.wizardState = null;
+          // Remove the wizard keyboard
+          try { await ctx.editMessageReplyMarkup({ reply_markup: undefined }); } catch { /* ok */ }
+          await this.createAndNotify(dir, flags, threadId);
+          break;
+        }
+
+        case 'browse': {
+          // Switch to browse view starting from home
+          const browsePath = homedir();
+          if (this.wizardState) {
+            this.wizardState.browsePath = browsePath;
+          } else {
+            // Wizard state lost — create new
+            this.wizardState = {
+              messageId: ctx.callbackQuery!.message!.message_id,
+              browsePath,
+            };
+          }
+          const keyboard = this.buildBrowseKeyboard(browsePath);
+          await this.editWizardMessage(
+            `<b>Create Session</b>\n\n📂 <code>${fmt.escapeHtml(browsePath)}</code>`,
+            keyboard,
+          );
+          await ctx.answerCallbackQuery();
+          break;
+        }
+
+        case 's': {
+          // Drill into subdirectory
+          if (!this.wizardState?.browsePath) {
+            await ctx.answerCallbackQuery({ text: 'No browse path' });
+            return;
+          }
+          try {
+            const entries = readdirSync(this.wizardState.browsePath, { withFileTypes: true });
+            const subdirs = entries
+              .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+              .map((e) => e.name)
+              .sort();
+            if (index >= subdirs.length) {
+              await ctx.answerCallbackQuery({ text: 'Directory not found' });
+              return;
+            }
+            const newPath = join(this.wizardState.browsePath, subdirs[index]);
+            this.wizardState.browsePath = newPath;
+            const keyboard = this.buildBrowseKeyboard(newPath);
+            await this.editWizardMessage(
+              `<b>Create Session</b>\n\n📂 <code>${fmt.escapeHtml(newPath)}</code>`,
+              keyboard,
+            );
+          } catch {
+            await ctx.answerCallbackQuery({ text: 'Cannot read directory' });
+            return;
+          }
+          await ctx.answerCallbackQuery();
+          break;
+        }
+
+        case 'up': {
+          // Go up one level
+          if (!this.wizardState?.browsePath) {
+            await ctx.answerCallbackQuery({ text: 'No browse path' });
+            return;
+          }
+          const parent = resolve(this.wizardState.browsePath, '..');
+          if (parent === this.wizardState.browsePath) {
+            await ctx.answerCallbackQuery({ text: 'Already at root' });
+            return;
+          }
+          this.wizardState.browsePath = parent;
+          const keyboard = this.buildBrowseKeyboard(parent);
+          await this.editWizardMessage(
+            `<b>Create Session</b>\n\n📂 <code>${fmt.escapeHtml(parent)}</code>`,
+            keyboard,
+          );
+          await ctx.answerCallbackQuery();
+          break;
+        }
+
+        case 'here':
+        case 'herec': {
+          // Create at current browse path
+          if (!this.wizardState?.browsePath) {
+            await ctx.answerCallbackQuery({ text: 'No directory selected' });
+            return;
+          }
+          const dir = this.wizardState.browsePath;
+          const flags = action === 'herec' ? '--chrome' : undefined;
+          const threadId = this.wizardState.threadId;
+          await ctx.answerCallbackQuery({ text: `Creating in ${basename(dir)}...` });
+          this.wizardState = null;
+          try { await ctx.editMessageReplyMarkup({ reply_markup: undefined }); } catch { /* ok */ }
+          await this.createAndNotify(dir, flags, threadId);
+          break;
+        }
+
+        case 'cancel': {
+          this.wizardState = null;
+          await ctx.answerCallbackQuery({ text: 'Cancelled' });
+          try { await ctx.editMessageText('Cancelled.'); } catch { /* ok */ }
+          break;
+        }
+
+        case 'noop': {
+          await ctx.answerCallbackQuery();
+          break;
+        }
+
+        default:
+          await ctx.answerCallbackQuery({ text: 'Unknown action' });
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[Telegram] Wizard callback error:', message);
+      await ctx.answerCallbackQuery({ text: 'Error: ' + message.slice(0, 100) });
+    }
+  }
+
+  // ---- Session resolution from context ----
+
+  /**
+   * Resolve the target session from a message context.
+   * Handles both forum mode (topic routing) and DM mode (activeSessionId).
+   * Returns null (and replies with error) if no valid session found.
+   */
+  private async resolveSessionFromCtx(
+    ctx: Context,
+  ): Promise<{ sessionId: string; session: ManagedSession; threadId?: number } | null> {
     if (this.forumMode && this.topicManager) {
       const threadId = ctx.message?.message_thread_id;
 
-      // General topic or no thread -- show help
       if (!threadId || threadId === TELEGRAM_GENERAL_TOPIC_ID) {
         await ctx.reply('Send messages in a session topic to deliver prompts.');
-        return;
+        return null;
       }
 
       const sessionId = this.topicManager.getSessionId(threadId);
       if (!sessionId) {
-        await ctx.reply('This topic is not linked to a session.', {
-          message_thread_id: threadId,
-        });
-        return;
+        await ctx.reply('This topic is not linked to a session.', { message_thread_id: threadId });
+        return null;
       }
 
       const session = this.getSession(sessionId);
       if (!session) {
-        await ctx.reply('Session no longer exists.', {
-          message_thread_id: threadId,
-        });
-        return;
+        await ctx.reply('Session no longer exists.', { message_thread_id: threadId });
+        return null;
       }
 
       if (session.status === 'offline') {
-        await ctx.reply('Session is offline.', {
-          message_thread_id: threadId,
-        });
-        return;
+        await ctx.reply('Session is offline.', { message_thread_id: threadId });
+        return null;
       }
 
-      try {
-        await this.sendPrompt(sessionId, text);
-        await ctx.reply('\u2192 sent', {
-          message_thread_id: threadId,
-        });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        await ctx.reply(`Failed: ${fmt.escapeHtml(message)}`, {
-          parse_mode: 'HTML',
-          message_thread_id: threadId,
-        });
-      }
-      return;
+      return { sessionId, session, threadId };
     }
 
-    // DM mode: existing behavior
+    // DM mode
     if (!this.activeSessionId) {
       await ctx.reply('No active session. Use /sessions to bind one.');
-      return;
+      return null;
     }
 
     const session = this.getSession(this.activeSessionId);
     if (!session) {
       this.activeSessionId = null;
       await ctx.reply('Active session no longer exists. Use /sessions to bind one.');
-      return;
+      return null;
     }
 
     if (session.status === 'offline') {
       await ctx.reply(`Session <b>${fmt.escapeHtml(fmt.getDisplayName(session))}</b> is offline.`, {
         parse_mode: 'HTML',
       });
+      return null;
+    }
+
+    return { sessionId: this.activeSessionId, session };
+  }
+
+  // ---- File download helper ----
+
+  /**
+   * Download a file from Telegram and save it to the uploads directory.
+   * Returns the local file path, or null on failure.
+   */
+  private async downloadTelegramFile(
+    fileId: string,
+    originalName?: string,
+    mimeType?: string,
+  ): Promise<string | null> {
+    try {
+      const file = await this.bot.api.getFile(fileId);
+      if (!file.file_path) {
+        console.error('[Telegram] getFile returned no file_path');
+        return null;
+      }
+
+      const url = `https://api.telegram.org/file/bot${this.config.token}/${file.file_path}`;
+      const resp = await fetch(url);
+      if (!resp.ok) {
+        console.error(`[Telegram] File download failed: ${resp.status}`);
+        return null;
+      }
+
+      // Determine extension from original name, mime type, or telegram path
+      let ext = '';
+      if (originalName) {
+        const dotIdx = originalName.lastIndexOf('.');
+        if (dotIdx !== -1) ext = originalName.slice(dotIdx);
+      }
+      if (!ext && mimeType) {
+        const map: Record<string, string> = {
+          'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif',
+          'image/webp': '.webp', 'application/pdf': '.pdf',
+        };
+        ext = map[mimeType] || '';
+      }
+      if (!ext && file.file_path) {
+        const dotIdx = file.file_path.lastIndexOf('.');
+        if (dotIdx !== -1) ext = file.file_path.slice(dotIdx);
+      }
+
+      if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+
+      const filename = `${Date.now()}-${randomBytes(4).toString('hex')}${ext}`;
+      const filepath = join(UPLOADS_DIR, filename);
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      writeFileSync(filepath, buffer);
+      console.log(`[Telegram] Saved upload ${filepath} (${buffer.length} bytes)`);
+      return filepath;
+    } catch (err) {
+      console.error('[Telegram] File download error:', err);
+      return null;
+    }
+  }
+
+  // ---- Photo and document handlers ----
+
+  private async handlePhotoMessage(ctx: Context): Promise<void> {
+    if (!this.isAuthorized(ctx)) return;
+
+    const resolved = await this.resolveSessionFromCtx(ctx);
+    if (!resolved) return;
+    const { sessionId, session, threadId } = resolved;
+
+    const photos = ctx.message?.photo;
+    if (!photos || photos.length === 0) return;
+
+    // Telegram sends multiple sizes; last element is the largest
+    const largest = photos[photos.length - 1];
+    const filepath = await this.downloadTelegramFile(largest.file_id, undefined, 'image/jpeg');
+    if (!filepath) {
+      await ctx.reply('Failed to download photo.', {
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
       return;
     }
 
+    const caption = ctx.message?.caption || '';
+    const promptText = `[User uploaded image: ${filepath}]\n${caption}`.trim();
+
     try {
-      await this.sendPrompt(this.activeSessionId, text);
+      await this.sendPrompt(sessionId, promptText);
       const name = fmt.getDisplayName(session);
-      await ctx.reply(`\u2192 sent to <b>${fmt.escapeHtml(name)}</b>`, {
+      const reply = this.forumMode
+        ? '→ photo sent'
+        : `→ photo sent to <b>${fmt.escapeHtml(name)}</b>`;
+      await ctx.reply(reply, {
         parse_mode: 'HTML',
+        ...(threadId ? { message_thread_id: threadId } : {}),
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error('[Telegram] Failed to send prompt:', message);
-      await ctx.reply(`Failed to send: ${fmt.escapeHtml(message)}`, {
+      await ctx.reply(`Failed: ${fmt.escapeHtml(message)}`, {
         parse_mode: 'HTML',
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
+    }
+  }
+
+  private async handleDocumentMessage(ctx: Context): Promise<void> {
+    if (!this.isAuthorized(ctx)) return;
+
+    const resolved = await this.resolveSessionFromCtx(ctx);
+    if (!resolved) return;
+    const { sessionId, session, threadId } = resolved;
+
+    const doc = ctx.message?.document;
+    if (!doc) return;
+
+    const filepath = await this.downloadTelegramFile(doc.file_id, doc.file_name, doc.mime_type);
+    if (!filepath) {
+      await ctx.reply('Failed to download file.', {
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
+      return;
+    }
+
+    const isImage = doc.mime_type?.startsWith('image/');
+    const tag = isImage ? 'User uploaded image' : 'User uploaded file';
+    const caption = ctx.message?.caption || '';
+    const promptText = `[${tag}: ${filepath}]\n${caption}`.trim();
+
+    try {
+      await this.sendPrompt(sessionId, promptText);
+      const name = fmt.getDisplayName(session);
+      const displayName = doc.file_name || 'file';
+      const reply = this.forumMode
+        ? `→ ${fmt.escapeHtml(displayName)} sent`
+        : `→ ${fmt.escapeHtml(displayName)} sent to <b>${fmt.escapeHtml(name)}</b>`;
+      await ctx.reply(reply, {
+        parse_mode: 'HTML',
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await ctx.reply(`Failed: ${fmt.escapeHtml(message)}`, {
+        parse_mode: 'HTML',
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
+    }
+  }
+
+  // ---- Text message handler ----
+
+  private async handleTextMessage(ctx: Context): Promise<void> {
+    if (!this.isAuthorized(ctx)) return;
+    let text = ctx.message?.text;
+    if (!text) return;
+
+    // Strip @botname suffix from /commands (Telegram appends it in groups)
+    if (text.startsWith('/')) {
+      text = text.replace(/^(\/\w+)@\w+/, '$1');
+    }
+
+    const resolved = await this.resolveSessionFromCtx(ctx);
+    if (!resolved) return;
+    const { sessionId, session, threadId } = resolved;
+
+    try {
+      await this.sendPrompt(sessionId, text);
+      const name = fmt.getDisplayName(session);
+      const reply = this.forumMode
+        ? '\u2192 sent'
+        : `\u2192 sent to <b>${fmt.escapeHtml(name)}</b>`;
+      await ctx.reply(reply, {
+        parse_mode: 'HTML',
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await ctx.reply(`Failed: ${fmt.escapeHtml(message)}`, {
+        parse_mode: 'HTML',
+        ...(threadId ? { message_thread_id: threadId } : {}),
       });
     }
   }
@@ -387,6 +952,12 @@ export class TelegramBot {
     const data = ctx.callbackQuery?.data;
     if (!data) {
       await ctx.answerCallbackQuery();
+      return;
+    }
+
+    // Wizard callbacks (nw: prefix)
+    if (data.startsWith('nw:')) {
+      await this.handleWizardCallback(ctx, data);
       return;
     }
 
@@ -506,7 +1077,25 @@ export class TelegramBot {
     const snippet = session.lastAssistantText
       ?.replace(/<!--rc:\w+:?[^>]*-->/g, '')
       .trim()
-      .slice(0, 500);
+      .slice(0, 3500);
+
+    // any -> offline (but not on first discovery): close the topic (preserves mapping).
+    // Handle BEFORE ensureTopic to avoid creating/reopening a topic just to close it.
+    if (
+      session.status === 'offline' &&
+      prevStatus !== 'offline' &&
+      prevStatus !== undefined
+    ) {
+      if (prevStatus === 'working') {
+        this.flushEventBuffer(session.id);
+      }
+      if (this.forumMode && this.topicManager) {
+        await this.topicManager.closeTopic(session.id);
+      } else {
+        await this.sendMessage(fmt.formatSessionOffline(name), { silent: true });
+      }
+      return;
+    }
 
     // In forum mode, get/create the session's topic
     // If topic creation fails, skip notification — never fall through to General
@@ -560,22 +1149,6 @@ export class TelegramBot {
         fmt.formatSessionWaiting(name, tool, toolInput),
         { keyboard, topicId },
       );
-    }
-
-    // any -> offline (but not on first discovery): delete the topic entirely
-    if (
-      session.status === 'offline' &&
-      prevStatus !== 'offline' &&
-      prevStatus !== undefined
-    ) {
-      if (this.forumMode && this.topicManager) {
-        await this.topicManager.deleteTopic(session.id);
-      } else {
-        await this.sendMessage(
-          fmt.formatSessionOffline(name),
-          { topicId, silent: true },
-        );
-      }
     }
 
   }
@@ -698,15 +1271,36 @@ export class TelegramBot {
       const cleaned = event.assistantText.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim();
       if (cleaned) {
         const desc = event.marker?.message || 'Response';
-        const snippet = cleaned.length > 500 ? cleaned.slice(0, 500) + '...' : cleaned;
         // Show marker as title, full text as expandable content
         if (cleaned.length > 100) {
-          line = `✅ <b>${fmt.escapeHtml(desc)}</b>\n<blockquote expandable>${fmt.escapeHtml(snippet)}</blockquote>`;
+          // Long content (plans, detailed responses): compute budget from Telegram limit,
+          // flush pending buffer, and send as standalone message to avoid blockquote splitting
+          const titleHtml = `✅ <b>${fmt.escapeHtml(desc)}</b>`;
+          // Budget: message limit minus timestamp (~30), title, blockquote tags (~40), margin
+          const overhead = 30 + titleHtml.length + 40 + 100;
+          const budget = TELEGRAM_MESSAGE_LIMIT - overhead;
+          const escaped = fmt.escapeHtml(cleaned);
+          const snippet = escaped.length > budget
+            ? escaped.slice(0, budget) + '\n[... truncated]'
+            : escaped;
+          const stopLine = `<code>${new Date(event.timestamp).toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+          })}</code> ${titleHtml}\n<blockquote expandable>${snippet}</blockquote>`;
+
+          // Flush any pending tool events first, then send stop as its own message
+          await this.flushEventBuffer(session.id);
+          const topicId = this.topicManager?.getTopicId(session.id);
+          if (topicId) {
+            await this.sendMessage(stopLine, { topicId, silent: true });
+          }
+          return; // Already sent — skip buffer
         } else {
           line = `✅ ${fmt.escapeHtml(cleaned)}`;
         }
       }
     } else if (event.type === 'user_prompt_submit' && event.assistantText) {
+      // Store initial prompt for /status display (only captures the first one per topic)
+      this.topicManager.setInitialPrompt(session.id, event.assistantText.trim());
       // User prompt — show what was sent
       const text = event.assistantText.trim();
       if (text) {
@@ -774,8 +1368,6 @@ export class TelegramBot {
           this.forumMode = true;
           this.topicManager = new TopicManager(this.chatId, this.bot.api);
           console.log('[Telegram] Forum mode enabled');
-          // Clean up any leftover closed topics from previous runs
-          this.topicManager.deleteClosedTopics().catch(() => {});
         } else if (forumSetting === 'true') {
           console.warn('[Telegram] forumMode=true but chat is not a forum group');
         }
