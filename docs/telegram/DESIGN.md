@@ -1,7 +1,25 @@
 # Telegram Integration -- Implementation Design
 
-Detailed design for adding Telegram as a notification and control channel.
-Read `RESEARCH.md` first for context on prior art and the hybrid approach.
+Detailed design for Telegram as a notification and control channel.
+Read `RESEARCH.md` first for the full competitive landscape and UX analysis.
+
+---
+
+## Current State (v1: DM Mode)
+
+Phase 1 is implemented and working:
+- grammY bot with long-polling
+- Status notifications: working->idle, working->waiting, any->offline
+- Inline keyboard for permission approve/reject
+- `/sessions`, `/bind`, `/status`, `/help` commands
+- Text messages delivered as prompts to the bound session
+- Auto-bind on permission events
+- HTML formatting via `telegram-format.ts`
+
+**What's wrong with v1:** All sessions share one DM chat. With 3+ concurrent
+sessions, notifications interleave into an unreadable stream. The bound session
+is invisible state. Permission buttons get buried. See RESEARCH.md "Verdict"
+section -- no project has solved single-chat multi-session elegantly.
 
 ---
 
@@ -13,17 +31,12 @@ Claude Code (in tmux)
   |-- Hook fires (instant) --> Server --> SessionManager
   |                                         |
   |                                         |--> WebSocket (dashboard, existing)
-  |                                         |--> TelegramBot (NEW: status alerts)
+  |                                         |--> TelegramBot (status alerts)
   |
   |-- JSONL transcript (append-only file)
         |
-        `--> TranscriptPoller (NEW, 2s) --> TelegramBot (rich content messages)
+        `--> TranscriptPoller (future) --> TelegramBot (rich content messages)
 ```
-
-Two new server components:
-1. **TelegramBot** (`server/TelegramBot.ts`) -- grammY bot, sends/receives messages
-2. **TranscriptPoller** (`server/TranscriptPoller.ts`) -- reads JSONL transcripts,
-   extracts full content, feeds to TelegramBot
 
 ### Data flow: outbound (Claude -> Telegram)
 
@@ -35,7 +48,7 @@ Hook event -> SessionManager.updateSession() -> TelegramBot.onStatusChange()
   - any -> offline:     "Session X went offline"
 ```
 
-**Rich content (from JSONL, 2s latency):**
+**Rich content (from JSONL, future -- 2s latency):**
 ```
 TranscriptPoller reads new JSONL lines -> parses entries -> TelegramBot.onContent()
   - Assistant text:  full response (split if > 4096 chars)
@@ -44,25 +57,19 @@ TranscriptPoller reads new JSONL lines -> parses entries -> TelegramBot.onConten
   - Thinking:        expandable blockquote
 ```
 
-**Deduplication between hooks and JSONL:**
-- Hooks trigger status alerts (idle/waiting/offline) -- these are STATUS messages
-- JSONL triggers content messages (text, tools, thinking) -- these are CONTENT messages
-- They don't overlap because they carry different information
-- If we later want hook events to also show content, dedup by `tool_use_id`
-
 ### Data flow: inbound (Telegram -> Claude)
 
 ```
-User sends text in Telegram chat
+User sends text in Telegram
   -> TelegramBot receives message
-  -> Resolves which session the chat is bound to
-  -> server.sendPrompt(sessionId, text)  (existing tmux injection)
+  -> Routes to session (by topic in v2, by active bind in v1)
+  -> server.sendPrompt(sessionId, text)  (tmux injection)
   -> Claude Code receives input
 ```
 
 For permission responses (inline keyboard):
 ```
-User taps [Yes] / [No] button
+User taps [Approve] / [Reject]
   -> TelegramBot receives callback_query
   -> server.sendKeys(sessionId, "Enter" or "Escape")
   -> Claude Code receives key
@@ -70,99 +77,130 @@ User taps [Yes] / [No] button
 
 ---
 
-## Component Design
+## v2: Forum Topics Mode
 
-### TelegramBot (`server/TelegramBot.ts`)
+### Why forum topics
 
+After surveying 10+ implementations (RESEARCH.md), every project that handles
+multi-session well uses forum topics (ccc, OpenClaw, ccbot). The pattern is
+proven and maps naturally to our problem:
+
+- **Session = topic.** Each Claude Code session gets its own topic.
+- **Topic list = session list.** Telegram's native UI is the dashboard.
+- **Zero interleaving.** Messages from different sessions never mix.
+- **Natural routing.** Message in topic X goes to session X. No bind command.
+- **Independent notifications.** Telegram lets you mute/unmute individual topics.
+
+### Setup changes
+
+v1 (current): User DMs the bot directly.
+v2 (topics):  User creates a Telegram group, enables topics, adds bot as admin.
+
+One-time setup:
+1. Create a Telegram Group (or use existing)
+2. Enable Topics in group settings
+3. Add bot to group as admin (needs: manage topics, send messages, pin messages)
+4. Set `TELEGRAM_CHAT_ID` to the group ID (negative number)
+5. Optionally set `TELEGRAM_FORUM_MODE=true` (or auto-detect from group type)
+
+### Topic lifecycle
+
+**Auto-creation:** When a new session appears (first hook event), the bot calls
+`createForumTopic` with the session's display name. Stores the mapping:
+`sessionId -> topicId` in `~/.remote-claude/data/telegram-topics.json`.
+
+**Naming:** Topic name = session display name (e.g. "bot debug", "ai-mvp").
+Topic icon = status emoji (optional, if API supports custom emoji).
+
+**Session offline:** Don't close the topic immediately -- session may come back.
+After a configurable timeout (e.g. 30 minutes), close the topic.
+Closed topics are still visible but move to the bottom of the list.
+
+**Session removed from dashboard:** Close the topic. User can manually delete.
+
+### Message routing
+
+**Outbound (bot -> group):** All `sendMessage` calls include
+`message_thread_id: topicId`. Messages appear only in their session's topic.
+
+**Inbound (user -> bot):** The `message_thread_id` in incoming messages
+identifies which topic the user is typing in. Map `topicId -> sessionId` for
+prompt delivery. No bind command needed.
+
+### General topic
+
+The "General" topic (always exists in forum groups) serves as the control
+channel:
+- `/sessions` posts here (with inline keyboard to jump to topics)
+- Pinned live-status message lives here (edited on every status change)
+- Bot startup/shutdown messages go here
+- Messages without a topic context route here
+
+### Pinned status message in General topic
+
+One pinned message, edited on every status change:
+
+```html
+<b>Sessions</b> (updated 11:30)
+
+🔵 <b>debug trace replay</b> -- working (Bash)
+   ~/code/ai-mvp | feat/replay-browse-rewind | 57k tok
+🟢 <b>bot debug</b> -- idle
+   "Pushed 3 commits to origin/main"
+🟢 <b>ai-mvp</b> -- idle
+   ~/code/replika/ai-mvp | main
 ```
-Dependencies: grammy
-Config: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (single-user DM mode)
+
+This provides the at-a-glance overview that the web dashboard gives, without
+requiring any commands.
+
+### DM fallback
+
+If the bot receives a DM (not in a group), fall back to v1 behavior:
+single-chat mode with /bind. This keeps the bot usable for simple setups
+and for users who don't want to create a group.
+
+---
+
+## UX Enhancements (both v1 and v2)
+
+### Silent vs loud notifications
+
+Use `disable_notification: true` for FYI messages:
+- **Loud** (phone buzzes): permission requests, questions
+- **Silent** (no buzz): session finished, went offline, status updates
+
+### Self-cleaning permission buttons
+
+After approve/reject, edit the original message:
 ```
-
-**Initialization:**
-- Create grammY Bot instance
-- Start long-polling (no webhook, no tunnel dependency)
-- Register command handlers: /sessions, /status, /bind, /help
-- Register message handler (text -> prompt injection)
-- Register callback_query handler (button presses)
-
-**Session binding (v1: simple DM mode):**
-- Single chat (the user's DM with the bot)
-- User sends message -> routed to the "active" session
-- `/bind <session-name>` switches which session receives messages
-- `/sessions` lists sessions with status indicators, tap to bind
-- When a session enters `waiting`, it auto-becomes the active session
-
-**Alternative (v2: topic mode):**
-- Telegram group with forum topics enabled
-- 1 topic per session (like ccbot)
-- Messages in a topic route to that session
-- New sessions auto-create topics
-- More complex but better for multi-session workflows
-
-**Status notifications:**
-Subscribe to SessionManager events. On status change:
-
-| Transition | Message | Keyboard |
-|---|---|---|
-| working -> idle | `Session done. [marker]` | -- |
-| working -> idle (question marker) | `Session has a question: [text]` | -- |
-| working -> waiting (permission) | `Approve? [tool] [details]` | `[Yes] [Allow All] [No]` |
-| any -> offline | `Session offline` | -- |
-
-Format as HTML with expandable blockquote for long assistant text.
-
-**Prompt delivery:**
-- Receive text message from user
-- Look up active session (or topic-bound session)
-- Call existing `POST /api/sessions/:id/prompt` internally
-  (or call SessionManager.sendPrompt directly)
-- Send typing indicator while Claude works
-
-### TranscriptPoller (`server/TranscriptPoller.ts`)
-
+Before: "bot debug needs approval\n\nBash: rm -rf node_modules\n[Approve] [Reject]"
+After:  "Approved Bash on bot debug (11:30)"
 ```
-Dependencies: fs (node built-in)
-Config: poll interval (default 2000ms)
+Removes buttons and condenses to one line.
+
+### ACK emoji reactions
+
+When user sends a prompt, react with a processing emoji (e.g. hourglass).
+Remove the reaction when Claude's response arrives. Provides instant feedback
+without cluttering the chat with "message sent" confirmations.
+
+### Expandable blockquotes for long content
+
+Use `<blockquote expandable>` for:
+- Assistant response text (when > ~500 chars)
+- Thinking blocks
+- Tool results (file contents, command output)
+
+These collapse by default, keeping the chat scannable.
+
+### Persistent reply keyboard (optional)
+
+For DM mode (v1), add always-visible buttons at the bottom:
 ```
-
-**Core loop (adapted from ccbot's proven pattern):**
-1. For each active session, get transcript path
-   - Our hook already receives `transcript_path` in stdin JSON
-   - Store it per-session in SessionManager when processing stop/tool events
-   - Alternatively: construct from `~/.claude/projects/{encodedCwd}/{sessionId}.jsonl`
-2. Check file mtime -- skip if unchanged since last poll
-3. Read from `lastByteOffset` to end of file
-4. Parse each line as JSON
-5. Extract content entries (assistant text, tool_use, tool_result, thinking)
-6. Pair tool_use with tool_result via `tool_use_id` (carry pending across cycles)
-7. Emit to TelegramBot for formatting and sending
-
-**State persistence:**
-- `~/.remote-claude/data/transcript-offsets.json`: `{ [sessionId]: byteOffset }`
-- Saved periodically (every 10s) and on shutdown
-- On startup, resume from saved offsets (crash recovery)
-
-**Entry types to handle:**
-
-| JSONL type | Content blocks | Action |
-|---|---|---|
-| `assistant` | `text` | Send as message (split if long) |
-| `assistant` | `thinking` | Send as expandable blockquote |
-| `assistant` | `tool_use` | Send tool summary, store in pending |
-| `assistant` | `tool_result` | Edit tool_use message with result |
-| `user` | `text` | Skip (user already knows what they sent) |
-| `summary` | -- | Skip (internal metadata) |
-
-**Transcript path discovery:**
-The hook's stdin JSON includes `transcript_path` for Stop events. We should:
-1. Extract `transcript_path` in the hook script (we partially do this already)
-2. Include it in ClaudeEvent
-3. SessionManager stores it per-session
-4. TranscriptPoller uses it directly (no globbing needed)
-
-If transcript_path is unavailable (older sessions), fall back to:
-`~/.claude/projects/-{cwd with slashes replaced by dashes}/sessions/{sessionId}.jsonl`
+[Sessions] [Status] [Stop]
+```
+Reduces typing on mobile. Not needed in topic mode where context is implicit.
 
 ---
 
@@ -171,59 +209,33 @@ If transcript_path is unavailable (older sessions), fall back to:
 ### HTML formatting (not MarkdownV2)
 
 Use `parse_mode: "HTML"` for all messages. Simpler than MarkdownV2, fewer
-escaping issues. See RESEARCH.md for rationale.
-
-**Escaping:** Only `<`, `>`, `&` need escaping (standard HTML entities).
+escaping issues. Only `<`, `>`, `&` need escaping.
 
 ### Message templates
 
 **Status: session finished**
 ```html
-<b>remote-claude</b> finished
+✅ <b>remote-claude</b> finished
 <blockquote expandable>Claude's response text here, can be long...</blockquote>
 ```
 
 **Status: session waiting (permission)**
 ```html
-<b>remote-claude</b> needs approval
+⚠️ <b>remote-claude</b> needs approval
 
 <b>Bash</b>: <code>rm -rf node_modules</code>
 ```
-With inline keyboard: `[Yes] [Allow All] [No]`
+With inline keyboard: `[Approve] [Reject]`
 
-**Content: assistant text**
+**Status: session has a question**
 ```html
-Claude's response here. Can include <code>inline code</code> and
-<pre>code blocks</pre> as appropriate.
+❓ <b>remote-claude</b> has a question
+  Checking if user received bot replies in Telegram
 ```
 
-**Content: tool use**
+**Status: session offline**
 ```html
-<b>Read</b>(<code>src/main.ts</code>)
-```
-
-**Content: tool result (edits tool_use message)**
-```html
-<b>Read</b>(<code>src/main.ts</code>)
--- 42 lines
-<blockquote expandable>First few lines of content...</blockquote>
-```
-
-**Content: Edit with diff**
-```html
-<b>Edit</b>(<code>src/main.ts</code>)
-+3 -1 lines
-<blockquote expandable><pre>
--old line
-+new line
- context
-+added line
-</pre></blockquote>
-```
-
-**Content: thinking**
-```html
-<blockquote expandable>Claude's reasoning here, collapsed by default...</blockquote>
+🔴 <b>remote-claude</b> went offline
 ```
 
 ### Message splitting
@@ -231,8 +243,7 @@ Claude's response here. Can include <code>inline code</code> and
 When content exceeds 4096 chars:
 1. Prefer splitting on newline boundaries
 2. Never split inside an HTML tag or expandable blockquote
-3. Add `[1/N]` suffix to multi-part messages
-4. Send parts sequentially (Telegram preserves order within a chat)
+3. Send parts sequentially (Telegram preserves order within a chat)
 
 ---
 
@@ -243,51 +254,51 @@ When content exceeds 4096 chars:
 ```bash
 # Required for Telegram (skip to disable)
 TELEGRAM_BOT_TOKEN=123456:ABC-DEF...    # From @BotFather
-TELEGRAM_CHAT_ID=987654321              # Your user/chat ID
+TELEGRAM_CHAT_ID=987654321              # User ID (DM) or group ID (topics)
 
 # Optional
-TELEGRAM_POLL_INTERVAL=2000             # Transcript poll interval (ms)
-TELEGRAM_NOTIFY_IDLE=true               # Notify on working->idle
-TELEGRAM_NOTIFY_WAITING=true            # Notify on working->waiting
+TELEGRAM_FORUM_MODE=auto                # auto | true | false
 ```
 
-### Setup flow
-
-1. Create bot via @BotFather, get token
-2. Send `/start` to bot, get your chat_id (bot can report it)
-3. Set env vars in `~/.remote-claude/.env` or shell
-4. Restart server -- bot starts automatically if token is set
-5. Send `/sessions` to verify connection
+`TELEGRAM_FORUM_MODE=auto` detects whether `TELEGRAM_CHAT_ID` points to a
+forum-enabled group (via `getChat` API) and enables topic mode automatically.
 
 ### Graceful degradation
 
 If `TELEGRAM_BOT_TOKEN` is not set:
 - TelegramBot is not instantiated
-- TranscriptPoller is not started
 - Server works exactly as before (dashboard-only mode)
-- No error, no warning (just a log line: "Telegram not configured, skipping")
+- No error, just a log line: "Telegram not configured, skipping"
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Skeleton + status notifications (hooks-only)
+### Phase 1: Hooks-only DM mode -- DONE
 
-Fastest path to "Telegram pings me when Claude needs something":
+Status notifications, inline keyboards, basic commands, prompt delivery.
 
-1. Add `grammy` dependency
-2. Create `TelegramBot.ts` with grammY long-polling
-3. Subscribe to SessionManager status changes
-4. Send status messages (idle, waiting, offline) as HTML
-5. Inline keyboard for permission approve/reject
-6. `/sessions` command
-7. Basic prompt delivery (text message -> active session)
+### Phase 2: Forum topics mode
 
-**This gives us:** reliable notifications + basic control. No JSONL yet.
+1. Add `createForumTopic` / topic management to TelegramBot
+2. Store `sessionId -> topicId` mapping (persisted to disk)
+3. Route outbound messages by `message_thread_id`
+4. Route inbound messages by `message_thread_id -> sessionId`
+5. Auto-create topics for new sessions
+6. Pinned status message in General topic
+7. DM fallback when not in a group
 
-### Phase 2: JSONL transcript polling (rich content)
+### Phase 3: UX polish
 
-Add the content layer:
+- Silent vs loud notifications
+- Self-cleaning permission buttons
+- ACK emoji reactions
+- Expandable blockquotes
+- Persistent reply keyboard (DM mode only)
+
+### Phase 4: Rich content via JSONL polling
+
+Add the content layer (ccbot-inspired):
 
 1. Extract `transcript_path` from hook events, store per-session
 2. Create `TranscriptPoller.ts` (byte-offset JSONL reader)
@@ -295,66 +306,51 @@ Add the content layer:
 4. Send formatted content to Telegram
 5. Edit tool_use messages with results
 6. Expandable blockquotes for thinking and long outputs
+7. Message merging (consecutive texts within 3800 chars)
+8. Persist transcript offsets for crash recovery
 
-**This gives us:** ccbot-level rich messages in Telegram.
+### Phase 5: Advanced features (future)
 
-### Phase 3: Polish
-
-- Message merging (consecutive texts within 3800 chars)
-- Typing indicator while Claude works
-- Rate limiting (1s between messages)
-- `/status` command with detailed session info
-- Error handling (bot reconnection, transcript file rotation)
-- Persist transcript offsets for crash recovery
-
-### Phase 4 (future): Topic mode
-
-- Enable forum topics in Telegram group
-- Auto-create topic per session
-- Route messages by topic -> session
-- Topic lifecycle (close topic when session ends)
+- Message queuing with `!` interrupt (linuz90 pattern)
+- Concat mode for complex prompts on mobile
+- Voice message transcription
+- Topic auto-close after offline timeout
 
 ---
 
 ## Open Questions
 
-1. **DM vs Group?** v1 uses DM (simpler). But a group with forum topics gives
-   per-session threading. ccbot requires forum mode. We could start with DM and
-   add topic mode later.
+1. **Topic naming.** Should topics include the tmux target for disambiguation,
+   or just the display name? Display name is cleaner but may collide if two
+   sessions have the same name.
 
-2. **What triggers content messages?** Should every tool_use/result generate a
-   Telegram message? Or only "interesting" ones? ccbot sends everything. We
-   might want a quieter mode (only final response + errors).
+2. **Topic reuse.** If a session goes offline and comes back (e.g. server
+   restart), should it reuse the existing topic? Probably yes -- match by
+   session display name or tmux target.
 
-3. **Notification vs content timing.** Hook says "session idle" instantly. JSONL
-   content arrives 2s later. Should the idle notification include the final
-   response (wait for JSONL)? Or send immediately and follow up with content?
+3. **Notification grouping.** If 3 sessions finish within seconds, should we
+   batch into one pinned-message update, or send 3 separate updates? The
+   pinned message handles this naturally (one edit = latest state).
 
-4. **Transcript path reliability.** We get `transcript_path` in Stop events.
-   Do we get it in other events? Need to verify. If not, we need the fallback
-   path construction.
-
-5. **Multiple devices.** If web dashboard and Telegram are both active, should
-   Telegram suppress notifications? Or always send? (Probably always send --
-   the user chose to enable it.)
+4. **DM vs Group default.** Should `npm run setup` guide users to create a
+   group, or default to DM mode? DM is simpler for getting started; group
+   is better long-term. Probably: start with DM, suggest group upgrade when
+   the user has 3+ sessions.
 
 ---
 
-## Files to Create/Modify
+## Files
 
-### New files
-- `server/TelegramBot.ts` -- grammY bot, message formatting, command handlers
-- `server/TranscriptPoller.ts` -- JSONL reader, entry parsing, content extraction
-- `server/telegram-format.ts` -- HTML formatting helpers (escaping, splitting, templates)
+### Existing (v1)
+- `server/TelegramBot.ts` -- grammY bot, commands, callbacks, notifications
+- `server/telegram-format.ts` -- HTML formatting, message splitting, templates
+- `shared/defaults.ts` -- `TELEGRAM_MESSAGE_LIMIT` constant
 
-### Modified files
-- `server/index.ts` -- instantiate TelegramBot + TranscriptPoller if configured
-- `server/SessionManager.ts` -- emit status change events for TelegramBot to consume;
-  store transcript_path per session
-- `shared/types.ts` -- add transcript_path to ClaudeEvent (if not already)
-- `hooks/remote-claude-hook.sh` -- extract transcript_path from stdin, include in event
-- `package.json` -- add grammy dependency
+### To create (v2)
+- `server/TopicManager.ts` -- topic lifecycle, sessionId<->topicId mapping
+- `server/TranscriptPoller.ts` -- JSONL reader (phase 4)
 
-### Not modified
-- Frontend (Telegram is independent of web dashboard)
-- `shared/config.ts` (config is env-var based, not shared config)
+### To modify (v2)
+- `server/TelegramBot.ts` -- add topic routing, pinned message, DM fallback
+- `server/telegram-format.ts` -- pinned status message template
+- `server/index.ts` -- pass forum mode config to TelegramBot
