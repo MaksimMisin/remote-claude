@@ -31,7 +31,6 @@ export class TelegramBot {
   private activeSessionId: string | null = null;
   private forumMode: boolean = false;
   private topicManager: TopicManager | null = null;
-  private pinnedStatusDebounce: ReturnType<typeof setTimeout> | null = null;
   /** Per-session event buffer for batched sending. */
   private eventBuffer = new Map<string, string[]>();
   /** Per-session flush timers for event batches. */
@@ -114,18 +113,18 @@ export class TelegramBot {
   private async handleSessions(ctx: Context): Promise<void> {
     if (!this.isAuthorized(ctx)) return;
 
-    // Forum mode: ensure topics exist and update pinned status
+    // Forum mode: ensure topics exist and update their status emoji
     if (this.forumMode && this.topicManager) {
       const sessions = this.getSessions();
       for (const s of sessions) {
         if (s.status !== 'offline') {
-          await this.topicManager.ensureTopic(s.id, fmt.getDisplayName(s));
+          const displayName = fmt.getDisplayName(s);
+          await this.topicManager.ensureTopic(s.id, displayName);
+          await this.topicManager.updateTopicTitle(s.id, s.status, displayName);
         }
       }
-      // Update pinned status
-      await this.updatePinnedStatus();
       const threadId = ctx.message?.message_thread_id;
-      await ctx.reply('Topics updated and status refreshed.', {
+      await ctx.reply('Topics updated.', {
         ...(threadId ? { message_thread_id: threadId } : {}),
       });
       return;
@@ -427,6 +426,21 @@ export class TelegramBot {
           break;
         }
 
+        case 'yesall': {
+          await this.sendKeys(sessionId, ['BTab']);
+          await ctx.answerCallbackQuery({ text: 'Approved all for session' });
+          try {
+            const session = this.getSession(sessionId);
+            const name = session ? fmt.getDisplayName(session) : sessionId;
+            const tool = session?.permissionRequest?.tool;
+            await ctx.editMessageText(
+              fmt.formatPermissionResolved(name, 'approved-all', tool),
+              { parse_mode: 'HTML' },
+            );
+          } catch { /* message may be too old to edit */ }
+          break;
+        }
+
         case 'no': {
           await this.sendKeys(sessionId, ['Escape']);
           await ctx.answerCallbackQuery({ text: 'Rejected' });
@@ -501,10 +515,10 @@ export class TelegramBot {
       topicId = await this.topicManager.ensureTopic(session.id, name);
       if (!topicId) {
         console.warn(`[Telegram] No topic for session ${session.id}, skipping notification`);
-        // Still update pinned status even if topic is missing
-        this.debouncedUpdatePinnedStatus();
         return;
       }
+      // Update topic title with status emoji
+      await this.topicManager.updateTopicTitle(session.id, session.status, name);
     }
 
     // Leaving working — flush any pending event buffer immediately
@@ -522,7 +536,7 @@ export class TelegramBot {
       } else {
         await this.sendMessage(
           fmt.formatSessionFinished(name, snippet, markerMsg),
-          { topicId, silent: true },
+          { topicId },
         );
       }
     }
@@ -539,6 +553,7 @@ export class TelegramBot {
 
       const keyboard = new InlineKeyboard()
         .text('\u2705 Approve', `yes:${session.id}`)
+        .text('\u2705 All', `yesall:${session.id}`)
         .text('\u274C Reject', `no:${session.id}`);
 
       await this.sendMessage(
@@ -559,10 +574,6 @@ export class TelegramBot {
       );
     }
 
-    // Update pinned status in forum mode
-    if (this.forumMode) {
-      this.debouncedUpdatePinnedStatus();
-    }
   }
 
   // ---- Message sending ----
@@ -608,42 +619,33 @@ export class TelegramBot {
     return this.sendMessage(html, { keyboard });
   }
 
-  // ---- Pinned status message ----
+  // ---- Session removal handler ----
 
-  /** Update the pinned status message in the General topic.
-   *  Uses a lock to prevent concurrent calls from creating duplicate messages. */
-  private pinnedStatusLock = false;
-  private async updatePinnedStatus(): Promise<void> {
+  /**
+   * Called by the server when a session is removed/dismissed/closed.
+   * Closes the topic and posts a brief summary to General.
+   */
+  async onSessionRemoved(sessionId: string, session?: ManagedSession): Promise<void> {
     if (!this.forumMode || !this.topicManager) return;
-    if (this.pinnedStatusLock) return; // another call is in progress
-    this.pinnedStatusLock = true;
 
-    try {
-      const sessions = this.getSessions();
-      const html = fmt.formatPinnedStatus(sessions);
+    const topicId = this.topicManager.getTopicId(sessionId);
+    if (!topicId) return;
 
-      const existingId = this.topicManager.pinnedMessageId;
+    const name = session ? fmt.getDisplayName(session) : sessionId;
 
-      // Try to edit existing pinned message
-      if (existingId) {
-        try {
-          await this.bot.api.editMessageText(this.chatId, existingId, html, {
-            parse_mode: 'HTML',
-          });
-          return;
-        } catch {
-          // Message was deleted or too old — don't recreate (avoids General spam)
-          console.warn('[Telegram] Could not edit pinned status message, will recreate on /sessions');
-          this.topicManager.pinnedMessageId = undefined;
-          return;
-        }
-      }
+    // Calculate duration
+    const duration = session?.createdAt
+      ? fmt.formatDuration(Date.now() - session.createdAt)
+      : '?';
 
-      // No existing pinned message — create one (only happens on first startup or after /sessions)
-      await this.createPinnedStatus(html);
-    } finally {
-      this.pinnedStatusLock = false;
-    }
+    // Close the topic
+    await this.topicManager.closeTopic(sessionId);
+
+    // Post brief summary to General (no topicId = General)
+    await this.sendMessage(
+      fmt.formatSessionClosed(name, duration),
+      { silent: true },
+    );
   }
 
   // ---- Event streaming to topics ----
@@ -652,39 +654,9 @@ export class TelegramBot {
    * Called by the server for each raw event. Buffers events and flushes
    * them as batched messages every 3 seconds per session topic.
    */
-  async onEvent(event: ClaudeEvent, session: ManagedSession): Promise<void> {
-    if (!this.forumMode || !this.topicManager) return;
-
-    // Only stream pre_tool_use events (the start of each tool call)
-    if (event.type !== 'pre_tool_use') return;
-
-    const line = fmt.formatEventLine(event.tool, event.toolInput);
-    if (!line) return;
-
-    // Include assistant text snippet if present (what Claude said before calling the tool)
-    const lines: string[] = [];
-    if (event.assistantText) {
-      const snippet = event.assistantText
-        .replace(/<!--rc:\w+:?[^>]*-->/g, '')
-        .trim()
-        .slice(0, 200);
-      if (snippet) {
-        lines.push(`<i>${fmt.escapeHtml(snippet)}</i>`);
-      }
-    }
-    lines.push(line);
-
-    // Add to buffer
-    const buf = this.eventBuffer.get(session.id) || [];
-    buf.push(...lines);
-    this.eventBuffer.set(session.id, buf);
-
-    // Schedule flush if not already scheduled
-    if (!this.eventFlushTimers.has(session.id)) {
-      this.eventFlushTimers.set(session.id, setTimeout(() => {
-        this.flushEventBuffer(session.id);
-      }, 3000));
-    }
+  async onEvent(_event: ClaudeEvent, _session: ManagedSession): Promise<void> {
+    // Intentionally disabled — only status changes (idle, waiting, question)
+    // trigger Telegram notifications. Tool-use streaming was too noisy.
   }
 
   /** Flush the event buffer for a session — send all collected lines as one message. */
@@ -708,36 +680,6 @@ export class TelegramBot {
     // Send as one message
     const html = lines.join('\n');
     await this.sendMessage(html, { topicId, silent: true });
-  }
-
-  /** Create a new pinned status message in General. */
-  private async createPinnedStatus(html: string): Promise<void> {
-    const msg = await this.sendMessage(html, { silent: true });
-    if (msg) {
-      try {
-        await this.bot.api.pinChatMessage(this.chatId, msg.message_id, {
-          disable_notification: true,
-        });
-        if (this.topicManager) {
-          this.topicManager.pinnedMessageId = msg.message_id;
-        }
-      } catch (err) {
-        console.error('[Telegram] Failed to pin status message:', err);
-      }
-    }
-  }
-
-  /** Debounced version -- avoids flooding Telegram API on rapid status changes. */
-  private debouncedUpdatePinnedStatus(): void {
-    if (this.pinnedStatusDebounce) {
-      clearTimeout(this.pinnedStatusDebounce);
-    }
-    this.pinnedStatusDebounce = setTimeout(() => {
-      this.pinnedStatusDebounce = null;
-      this.updatePinnedStatus().catch((err) => {
-        console.error('[Telegram] Failed to update pinned status:', err);
-      });
-    }, 2000); // 2s debounce to batch rapid status changes
   }
 
   // ---- Lifecycle ----
@@ -768,13 +710,7 @@ export class TelegramBot {
       drop_pending_updates: true,
       onStart: async () => {
         console.log('[Telegram] Bot is running');
-        if (this.forumMode) {
-          await this.updatePinnedStatus();
-          // Send to General topic (omit topicId — Telegram rejects thread_id for General)
-          await this.sendMessage('Bot connected.', { silent: true });
-        } else {
-          await this.sendMessage('Bot connected.');
-        }
+        await this.sendMessage('Bot connected.', { silent: true });
       },
     });
   }
@@ -782,6 +718,9 @@ export class TelegramBot {
   /** Stop the bot gracefully. */
   async stop(): Promise<void> {
     console.log('[Telegram] Stopping bot...');
+    try {
+      await this.sendMessage('Bot disconnected.', { silent: true });
+    } catch { /* best-effort */ }
     await this.bot.stop();
     console.log('[Telegram] Bot stopped');
   }

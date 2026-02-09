@@ -53,6 +53,11 @@ export function formatToolSummary(
       return `Glob(${String(toolInput?.pattern ?? '')})`;
     case 'Grep':
       return `Grep(${String(toolInput?.pattern ?? '')})`;
+    case 'ExitPlanMode': {
+      const pf = String(toolInput?.planFile ?? '');
+      const name = pf.split('/').pop() || 'Plan';
+      return `Review plan: ${name}`;
+    }
     default:
       return `${tool}()`;
   }
@@ -131,6 +136,21 @@ export function formatSessionWaiting(
     const summary = formatToolSummary(tool, toolInput);
     msg += `\n\n<b>${escapeHtml(tool)}</b>: <code>${escapeHtml(summary)}</code>`;
   }
+
+  // For ExitPlanMode, include the plan content so reviewers can make informed decisions
+  if (tool === 'ExitPlanMode' && toolInput?.planContent) {
+    const plan = String(toolInput.planContent);
+    const escaped = escapeHtml(plan);
+    // Blockquote overhead: "<blockquote expandable>...</blockquote>\n\n" ≈ 40 chars
+    const budget = TELEGRAM_MESSAGE_LIMIT - msg.length - 60;
+    if (budget > 200) {
+      const truncated = escaped.length > budget
+        ? escaped.slice(0, budget) + '\n[... truncated]'
+        : escaped;
+      msg += `\n\n<blockquote expandable>${truncated}</blockquote>`;
+    }
+  }
+
   return msg;
 }
 
@@ -157,6 +177,26 @@ const STATUS_EMOJI: Record<string, string> = {
   waiting: '\uD83D\uDFE1',
   offline: '\uD83D\uDD34',
 };
+
+/** Get status emoji for a session status. */
+export function getStatusEmoji(status: string): string {
+  return STATUS_EMOJI[status] ?? '\u2B1C';
+}
+
+/** Format a duration in ms to a human-readable string (e.g. "2h 34m"). */
+export function formatDuration(ms: number): string {
+  const totalMin = Math.floor(ms / 60_000);
+  if (totalMin < 1) return '<1m';
+  const hours = Math.floor(totalMin / 60);
+  const mins = totalMin % 60;
+  if (hours === 0) return `${mins}m`;
+  return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+}
+
+/** Format a "session closed" summary for General topic. */
+export function formatSessionClosed(sessionName: string, duration: string): string {
+  return `\uD83D\uDCCB <b>${escapeHtml(sessionName)}</b> closed (${escapeHtml(duration)})`;
+}
 
 /** Format a list of sessions for the /sessions command. */
 export function formatSessionList(
@@ -186,87 +226,10 @@ export function formatSessionList(
   return `<b>Sessions</b>\n\n${lines.join('\n')}`;
 }
 
-/** Format the live-status pinned message for the General topic. */
-export function formatPinnedStatus(
-  sessions: Array<{
-    name: string;
-    customName?: string;
-    windowName?: string;
-    id: string;
-    status: string;
-    currentTool?: string;
-    cwd?: string;
-    gitBranch?: string;
-    gitDirty?: boolean;
-    totalTokens?: number;
-    lastMarker?: { category: string; message: string };
-    lastAssistantText?: string;
-  }>,
-): string {
-  const time = new Date().toLocaleTimeString('en-US', {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-
-  if (sessions.length === 0) {
-    return `<b>Sessions</b> <i>(${time})</i>\n\nNo active sessions.`;
-  }
-
-  const lines: string[] = [`<b>Sessions</b> <i>(${time})</i>\n`];
-
-  for (const s of sessions) {
-    const emoji = STATUS_EMOJI[s.status] ?? '\u2B1C';
-    const displayName = getDisplayName(s);
-    let line = `${emoji} <b>${escapeHtml(displayName)}</b>`;
-
-    // Status detail on same line
-    if (s.status === 'working' && s.currentTool) {
-      line += ` \u2014 ${escapeHtml(s.currentTool)}`;
-    } else if (s.status === 'idle' && s.lastMarker?.message) {
-      line += ` \u2014 idle`;
-    } else {
-      line += ` \u2014 ${escapeHtml(s.status)}`;
-    }
-
-    lines.push(line);
-
-    // Second line: context info (cwd, branch, tokens)
-    const details: string[] = [];
-    if (s.cwd) {
-      // Abbreviate home dir
-      const shortCwd = s.cwd.replace(/^\/Users\/[^/]+/, '~');
-      details.push(shortCwd);
-    }
-    if (s.gitBranch) {
-      details.push(s.gitBranch + (s.gitDirty ? '*' : ''));
-    }
-    if (s.totalTokens != null) {
-      details.push(`${Math.round(s.totalTokens / 1000)}k tok`);
-    }
-    if (details.length > 0) {
-      lines.push(`   ${escapeHtml(details.join(' | '))}`);
-    }
-
-    // For idle sessions, show last message snippet
-    if (s.status === 'idle' && s.lastAssistantText) {
-      const snippet = s.lastAssistantText
-        .replace(/<!--rc:\w+:?[^>]*-->/g, '')
-        .trim()
-        .slice(0, 100);
-      if (snippet) {
-        lines.push(`   <i>"${escapeHtml(snippet)}"</i>`);
-      }
-    }
-  }
-
-  return lines.join('\n');
-}
-
 /** Format a compact one-liner for resolved permission buttons. */
 export function formatPermissionResolved(
   sessionName: string,
-  action: 'approved' | 'rejected',
+  action: 'approved' | 'approved-all' | 'rejected',
   tool?: string,
 ): string {
   const time = new Date().toLocaleTimeString('en-US', {
@@ -274,8 +237,8 @@ export function formatPermissionResolved(
     minute: '2-digit',
     hour12: false,
   });
-  const emoji = action === 'approved' ? '\u2705' : '\u274C';
-  const verb = action === 'approved' ? 'Approved' : 'Rejected';
+  const emoji = action === 'rejected' ? '\u274C' : '\u2705';
+  const verb = action === 'approved' ? 'Approved' : action === 'approved-all' ? 'Approved all' : 'Rejected';
   let msg = `${emoji} ${verb}`;
   if (tool) {
     msg += ` ${escapeHtml(tool)}`;

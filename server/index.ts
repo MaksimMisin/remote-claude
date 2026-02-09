@@ -386,8 +386,10 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       const session = sessionManager.get(route.id);
 
       if (!route.action && method === 'DELETE') {
+        const sessionSnapshot = sessionManager.get(route.id);
         const removed = await sessionManager.remove(route.id);
         if (!removed) return error(res, 'Session not found', 404);
+        if (telegramBot) telegramBot.onSessionRemoved(route.id, sessionSnapshot).catch(() => {});
         return json(res, { ok: true });
       }
 
@@ -514,16 +516,20 @@ const server = createServer(async (req: IncomingMessage, res: ServerResponse) =>
       }
 
       if (route.action === 'dismiss' && method === 'POST') {
+        const sessionSnapshot = session;
         const dismissed = sessionManager.dismiss(route.id);
         if (!dismissed) return error(res, 'Session not found', 404);
         broadcast({ type: 'session_removed', payload: { sessionId: route.id } });
+        if (telegramBot) telegramBot.onSessionRemoved(route.id, sessionSnapshot).catch(() => {});
         return json(res, { ok: true });
       }
 
       if (route.action === 'close' && method === 'POST') {
+        const sessionSnapshot = session;
         const closed = await sessionManager.close(route.id);
         if (!closed) return error(res, 'Session not found', 404);
         broadcast({ type: 'session_removed', payload: { sessionId: route.id } });
+        if (telegramBot) telegramBot.onSessionRemoved(route.id, sessionSnapshot).catch(() => {});
         return json(res, { ok: true });
       }
 
