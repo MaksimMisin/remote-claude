@@ -24,14 +24,17 @@ Server (Node.js + TypeScript, port 4080)
     | 1. EventProcessor deduplicates + stores event
     | 2. SessionManager auto-discovers session or updates existing
     | 3. Broadcasts via WebSocket to all connected clients
+    | 4. Streams tool events to Telegram forum topics (batched per 3s)
+    | 5. Sends status notifications (finished/waiting/offline) to topics
     v
-Mobile Web Dashboard (React + Vite)
-    |
-    | Displays session cards, event feeds, status indicators
-    | Sends prompts via POST /api/sessions/:id/prompt
-    | Triggers Web Notifications + audio alerts on status changes
-    v
-Server delivers prompt to tmux pane via load-buffer/paste-buffer
+Mobile Web Dashboard (React + Vite)       Telegram Forum Group
+    |                                        |
+    | Displays session cards, event feeds    | One topic per session
+    | Sends prompts via HTTP API             | Tool events streamed in real-time
+    | Web Push + audio alerts                | Permission approve/reject buttons
+    v                                        | Pinned live-status in General topic
+Server delivers prompt to tmux pane          | Send messages to deliver prompts
+    via load-buffer/paste-buffer             v
 ```
 
 ### Key Design Decisions
@@ -176,6 +179,53 @@ Manages Web Push (VAPID) for reliable background notifications on Android/deskto
 - Auto-removes stale subscriptions (410/404 responses from push service)
 - Push notifications triggered on status transitions: working->idle, working->waiting, any->waiting
 
+### 3.7 TelegramBot.ts -- Telegram Forum Topics
+
+Telegram bot (grammY) providing a parallel notification channel. Supports two modes: **forum mode** (supergroup with topics enabled, one topic per session) and **DM mode** (legacy, single chat with bind-based routing).
+
+**Forum mode auto-detection:** On startup, calls `bot.api.getChat()` and checks `is_forum === true`. Overridable via `TELEGRAM_FORUM_MODE` env var (`auto`/`true`/`false`).
+
+**Topic lifecycle:**
+- Topics auto-created per session via `TopicManager.ensureTopic(sessionId, displayName)`
+- Topics renamed when session's display name changes (fire-and-forget `editForumTopic` call)
+- Closed topics reopened when the session resumes activity
+
+**Event streaming (tool events):**
+- `onEvent(event, session)` called from EventProcessor callback for each raw event
+- Only `pre_tool_use` events are forwarded (avoids duplication with `post_tool_use`)
+- Events buffered per-session and flushed every 3 seconds as a single batched message
+- Includes assistant text snippets (what Claude said before calling the tool)
+- Format: emoji + verb + subject (`📖 Reading models.py`, `🔍 Searching: pattern`, `💻 $ npm test`)
+- Buffer flushed immediately on status transition out of `working`
+
+**Status notifications:**
+| Transition | Message | Sound |
+|-----------|---------|-------|
+| working → idle | ✅ session finished + snippet | Silent |
+| working → idle (question marker) | ❓ session has a question + text | Loud |
+| any → waiting | ⚠️ session needs approval + Approve/Reject buttons | Loud |
+| any → offline | 🔴 session went offline | Silent |
+
+**Pinned status message:** A live-updating message in the General topic showing all sessions with status, cwd, branch, and token count. Edited on every status change (debounced 2s). If the pinned message is deleted, a new one is created and pinned.
+
+**Permission buttons:** Inline keyboard with Approve/Reject. On tap, sends Enter/Escape keys to tmux pane. Message self-cleans to a compact one-liner (`✅ Approved Bash on session-name (15:30)`).
+
+**Prompt delivery:** Text messages in a session topic are delivered as prompts to that session's tmux pane. General topic messages show help text.
+
+### 3.8 TopicManager.ts -- Forum Topic Mapping
+
+Bidirectional mapping between session IDs and Telegram forum topic IDs. Persisted to `~/.remote-claude/data/telegram-topics.json`.
+
+- `ensureTopic(sessionId, displayName)` -- Creates topic if needed, reopens if closed, renames if display name changed. Uses a per-session promise lock to prevent race-condition duplicate topic creation.
+- `getTopicId(sessionId)` / `getSessionId(topicId)` -- Lookups
+- `closeTopic(sessionId)` -- Closes topic in Telegram + marks closed in store
+- `pinnedMessageId` getter/setter -- Persisted ID of the pinned status message in General
+
+**Gotchas:**
+- General topic CANNOT use `message_thread_id=1` -- must omit the parameter entirely
+- Bot requires admin with "Manage Topics" permission for topic CRUD
+- Concurrent `ensureTopic()` calls use a `pending` Map as mutex to prevent duplicate topics
+
 ---
 
 ## 4. Frontend (React + Vite)
@@ -310,6 +360,10 @@ interface ClaudeEvent {
 - **Service worker source path**: `frontend/public/sw.js` is the source. Vite copies it to `public/sw.js` on build. Editing `public/sw.js` directly gets overwritten.
 - **Permission request fallback**: Permission request data falls back to preceding `pre_tool_use` event when the notification event lacks tool info.
 - **`public/index.html`** is a build artifact from the React frontend -- don't edit directly.
+- **Telegram General topic**: Sending with `message_thread_id=1` is rejected by Telegram API. Must omit the parameter entirely to send to General topic.
+- **Telegram rate limits**: Group chats have ~20 messages/minute limit. Tool events are batched per-session every 3 seconds to stay within limits.
+- **`currentToolInput` clearing**: On `post_tool_use`, `currentToolInput` is set to undefined (while `currentTool` is kept). Event streaming captures tool info at event time, not on flush.
+- **Topic rename race**: `ensureTopic()` fast path checks for name mismatch and fires rename asynchronously. Store is updated immediately to prevent redundant rename attempts.
 
 ---
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # rc - Remote Claude toggle
-# Usage: rc on | rc off | rc [status]
+# Usage: rc on | rc off | rc restart | rc [status]
 
 RC_DIR="$HOME/.remote-claude"
 PAUSE_FILE="$RC_DIR/paused"
@@ -63,6 +63,20 @@ case "${1:-status}" in
     fi
     ;;
 
+  restart)
+    PIDS=$(get_server_pids)
+    if [ -n "$PIDS" ]; then
+      kill $PIDS 2>/dev/null
+      echo "server: killed (PID $PIDS)"
+      # Wait for port to free
+      for i in $(seq 1 10); do
+        sleep 0.5
+        get_server_pids &>/dev/null || break
+      done
+    fi
+    start_server
+    ;;
+
   status|"")
     if [ -f "$PAUSE_FILE" ]; then
       echo "hooks: PAUSED"
@@ -82,7 +96,7 @@ case "${1:-status}" in
     ;;
 
   *)
-    echo "Usage: rc [on|off|status|log]"
+    echo "Usage: rc [on|off|restart|status|log]"
     exit 1
     ;;
 esac
