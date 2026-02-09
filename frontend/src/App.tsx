@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import type { ManagedSession, ClaudeEvent, RcMarker } from './types';
 import type { PermissionAction } from './components/PermissionPrompt';
 import { useWebSocket } from './hooks/useWebSocket';
@@ -32,10 +32,6 @@ export default function App() {
     visible: false,
   });
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [queuedPrompts, setQueuedPrompts] = useState<Record<string, QueuedPrompt[]>>({});
-  const queuedPromptsRef = useRef(queuedPrompts);
-  queuedPromptsRef.current = queuedPrompts;
-
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
 
@@ -102,9 +98,6 @@ export default function App() {
     [],
   );
 
-  // Ref for doSend — declared early so onSessionUpdate can reference it
-  const doSendRef = useRef((_sid: string, _text: string, _images: { name: string; base64: string; mimeType: string }[]) => {});
-
   const wsCallbacks = useRef({
     onSessions: (list: ManagedSession[]) => {
       const map: Record<string, ManagedSession> = {};
@@ -137,29 +130,11 @@ export default function App() {
             true,
           );
         } else if (prevStatus === 'working' && session.status === 'idle') {
-          // Auto-send next queued prompt after a short delay
-          const queue = queuedPromptsRef.current[session.id];
-          const queued = queue?.[0];
-          if (queued) {
-            setQueuedPrompts((prev) => {
-              const arr = prev[session.id];
-              if (!arr || arr.length <= 1) {
-                const next = { ...prev };
-                delete next[session.id];
-                return next;
-              }
-              return { ...prev, [session.id]: arr.slice(1) };
-            });
-            setTimeout(() => {
-              doSendRef.current(session.id, queued.text, queued.images);
-            }, 300);
-          } else {
-            notificationsRef.current.notify(
-              session.name + ' finished',
-              contextSnippet || session.lastMarker?.message || 'Task complete',
-              false,
-            );
-          }
+          notificationsRef.current.notify(
+            session.name + ' finished',
+            contextSnippet || session.lastMarker?.message || 'Task complete',
+            false,
+          );
         } else if (
           session.status === 'waiting' &&
           prevStatus !== 'waiting'
@@ -169,16 +144,6 @@ export default function App() {
             contextSnippet || session.lastMarker?.message || 'Waiting for your response',
             true,
           );
-        }
-
-        // Clear queue when session goes offline
-        if (session.status === 'offline') {
-          setQueuedPrompts((prev) => {
-            if (!prev[session.id]) return prev;
-            const next = { ...prev };
-            delete next[session.id];
-            return next;
-          });
         }
 
         return { ...prev, [session.id]: session };
@@ -201,12 +166,6 @@ export default function App() {
         return next;
       });
       setSelectedId((prev) => (prev === sessionId ? null : prev));
-      setQueuedPrompts((prev) => {
-        if (!prev[sessionId]) return prev;
-        const next = { ...prev };
-        delete next[sessionId];
-        return next;
-      });
     },
     onVersion: (v: string) => {
       setVersion(v);
@@ -233,13 +192,14 @@ export default function App() {
     [send],
   );
 
-  // Send prompt helper — also stored in a ref for use in callbacks
-  const doSend = useCallback(
+  // Send prompt — always send directly; Claude Code has a native queue
+  const handleSend = useCallback(
     (
-      sid: string,
       text: string,
       images: { name: string; base64: string; mimeType: string }[],
     ) => {
+      const sid = selectedIdRef.current;
+      if (!sid) return;
       const body: Record<string, unknown> = { text: text || '' };
       if (images.length === 1) {
         body.image = images[0];
@@ -249,28 +209,6 @@ export default function App() {
       apiPost('/api/sessions/' + sid + '/prompt', body);
     },
     [],
-  );
-  doSendRef.current = doSend;
-
-  const handleSend = useCallback(
-    (
-      text: string,
-      images: { name: string; base64: string; mimeType: string }[],
-    ) => {
-      const sid = selectedIdRef.current;
-      if (!sid) return;
-      const session = sessionsRef.current[sid];
-      if (session && session.status === 'working') {
-        // Append to queue
-        setQueuedPrompts((prev) => ({
-          ...prev,
-          [sid]: [...(prev[sid] || []), { text, images }],
-        }));
-      } else {
-        doSend(sid, text, images);
-      }
-    },
-    [doSend],
   );
 
   // Cancel
@@ -283,45 +221,6 @@ export default function App() {
       return next;
     });
     apiPost('/api/sessions/' + sid + '/cancel', {});
-  }, []);
-
-  // Cancel a specific queued prompt by index, or all if index is -1
-  const handleCancelQueue = useCallback((sid: string, index?: number) => {
-    setQueuedPrompts((prev) => {
-      const arr = prev[sid];
-      if (!arr) return prev;
-      if (index === undefined || index === -1 || arr.length <= 1) {
-        // Clear all
-        const next = { ...prev };
-        delete next[sid];
-        return next;
-      }
-      const updated = arr.filter((_, i) => i !== index);
-      if (updated.length === 0) {
-        const next = { ...prev };
-        delete next[sid];
-        return next;
-      }
-      return { ...prev, [sid]: updated };
-    });
-  }, []);
-
-  // Edit last queued prompt — pops it from array and returns it
-  const handleEditQueue = useCallback((sid: string): QueuedPrompt | undefined => {
-    const arr = queuedPromptsRef.current[sid];
-    if (!arr || arr.length === 0) return undefined;
-    const queued = arr[arr.length - 1];
-    setQueuedPrompts((prev) => {
-      const arr2 = prev[sid];
-      if (!arr2) return prev;
-      if (arr2.length <= 1) {
-        const next = { ...prev };
-        delete next[sid];
-        return next;
-      }
-      return { ...prev, [sid]: arr2.slice(0, -1) };
-    });
-    return queued;
   }, []);
 
   // Permission action (Yes/Allow All/No)
@@ -358,12 +257,6 @@ export default function App() {
       return next;
     });
     setSelectedId((prev) => (prev === id ? null : prev));
-    setQueuedPrompts((prev) => {
-      if (!prev[id]) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
     apiPost('/api/sessions/' + id + '/dismiss', {});
   }, []);
 
@@ -397,12 +290,6 @@ export default function App() {
       return next;
     });
     setSelectedId((prev) => (prev === id ? null : prev));
-    setQueuedPrompts((prev) => {
-      if (!prev[id]) return prev;
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
     apiPost('/api/sessions/' + id + '/close', {});
   }, []);
 
@@ -438,15 +325,6 @@ export default function App() {
     ? selectedSession.claudeSessionId.slice(0, 8)
     : selectedId;
   const selectedEvents = selectedEventsKey ? events[selectedEventsKey] || [] : [];
-  const queuedSessionCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    for (const [sid, arr] of Object.entries(queuedPrompts)) {
-      if (arr.length > 0) counts[sid] = arr.length;
-    }
-    return counts;
-  }, [queuedPrompts]);
-  const queuedSessionIds = useMemo(() => new Set(Object.keys(queuedSessionCounts)), [queuedSessionCounts]);
-
   return (
     <div id="app">
       <Header
@@ -467,8 +345,6 @@ export default function App() {
           sessions={sessions}
           selectedId={selectedId}
           cancellingIds={cancellingIds}
-          queuedSessionIds={queuedSessionIds}
-          queuedSessionCounts={queuedSessionCounts}
           onSelect={handleSelect}
           onDismiss={handleDismiss}
           onClose={handleClose}
@@ -482,11 +358,8 @@ export default function App() {
         <InputArea
           selectedId={selectedId}
           sessionStatus={selectedSession?.status}
-          promptQueue={queuedPrompts[selectedId] || null}
           onSend={handleSend}
           onCancel={handleCancel}
-          onCancelQueue={(index?: number) => handleCancelQueue(selectedId, index)}
-          onEditQueue={() => handleEditQueue(selectedId)}
         />
       )}
 

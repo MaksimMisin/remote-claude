@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import type React from 'react';
-import type { PendingImage, QueuedPrompt, SessionStatus } from '../types';
+import type { PendingImage, SessionStatus } from '../types';
 
 interface SlashCommand {
   cmd: string;
@@ -20,24 +20,18 @@ const SLASH_COMMANDS: SlashCommand[] = [
 interface InputAreaProps {
   selectedId: string;
   sessionStatus?: SessionStatus;
-  promptQueue: QueuedPrompt[] | null;
   onSend: (
     text: string,
     images: { name: string; base64: string; mimeType: string }[],
   ) => void;
   onCancel: () => void;
-  onCancelQueue: (index?: number) => void;
-  onEditQueue: () => QueuedPrompt | undefined;
 }
 
 export function InputArea({
   selectedId,
   sessionStatus,
-  promptQueue,
   onSend,
   onCancel,
-  onCancelQueue,
-  onEditQueue,
 }: InputAreaProps): React.ReactElement {
   const [text, setText] = useState('');
   const [images, setImages] = useState<PendingImage[]>([]);
@@ -118,20 +112,6 @@ export function InputArea({
     setImages((prev) => prev.filter((_, i) => i !== idx));
   }, []);
 
-  const handleEditQueueClick = useCallback(() => {
-    const queued = onEditQueue();
-    if (queued) {
-      setText(queued.text);
-      setImages(queued.images.map((img) => ({
-        name: img.name,
-        dataUrl: `data:${img.mimeType};base64,${img.base64}`,
-        base64: img.base64,
-        mimeType: img.mimeType,
-      })));
-      setTimeout(() => textInputRef.current?.focus(), 50);
-    }
-  }, [onEditQueue]);
-
   // Slash command autocomplete
   const [slashIndex, setSlashIndex] = useState(-1);
   const slashMatches = useMemo(() => {
@@ -199,36 +179,9 @@ export function InputArea({
   );
 
   const isWorking = sessionStatus === 'working';
-  const hasQueue = !!promptQueue && promptQueue.length > 0;
-  const queueLen = promptQueue?.length || 0;
 
   return (
     <div id="input-area" className="visible" ref={inputAreaRef}>
-      {hasQueue && (
-        <div className="queue-list">
-          <div className="queue-list-header">
-            <span className="queue-list-title">Queue ({queueLen})</span>
-            {queueLen > 1 && (
-              <button className="queue-banner-btn" onClick={() => onCancelQueue(-1)}>Clear all</button>
-            )}
-          </div>
-          {promptQueue!.map((q, i) => (
-            <div className="queue-item" key={i}>
-              <span className="queue-item-num">{i + 1}</span>
-              <span className="queue-item-text">
-                {q.text.slice(0, 80)}{q.text.length > 80 ? '...' : ''}
-                {q.images.length > 0 && (
-                  <span className="queue-badge-images"> (+{q.images.length} img)</span>
-                )}
-              </span>
-              <button className="queue-item-x" onClick={() => onCancelQueue(i)}>&times;</button>
-            </div>
-          ))}
-          <div className="queue-list-footer">
-            <button className="queue-banner-btn" onClick={handleEditQueueClick}>Edit last</button>
-          </div>
-        </div>
-      )}
       {images.length > 0 && (
         <div id="img-preview" className="visible">
           {images.map((img, i) => (
@@ -261,7 +214,7 @@ export function InputArea({
       <div id="input-text-row">
         <textarea
           ref={textInputRef}
-          placeholder={isWorking ? `Add to queue${hasQueue ? ` (${queueLen} pending)` : ''}...` : 'Send a message...'}
+          placeholder="Send a message..."
           rows={2}
           value={text}
           onChange={(e) => setText(e.target.value)}
@@ -284,13 +237,13 @@ export function InputArea({
         >
           {'\uD83D\uDCCE'}
         </button>
-        <span className="input-hint">{'\u2318\u21B5'} {isWorking ? 'queue' : 'send'}</span>
+        <span className="input-hint">{'\u2318\u21B5'} send</span>
         <div className="input-actions-right">
           <button className="btn-cancel" onClick={onCancel}>
             Cancel
           </button>
-          <button className={isWorking ? 'btn-queue' : 'btn-send'} onClick={handleSend}>
-            {isWorking ? 'Queue' : 'Send'}
+          <button className="btn-send" onClick={handleSend}>
+            Send
           </button>
         </div>
       </div>

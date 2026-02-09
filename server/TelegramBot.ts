@@ -25,9 +25,12 @@ export interface TelegramBotConfig {
   forumMode?: 'auto' | 'true' | 'false';
   getSessions: () => ManagedSession[];
   getSession: (id: string) => ManagedSession | undefined;
-  sendPrompt: (sessionId: string, text: string) => Promise<void>;
+  sendPrompt: (sessionId: string, text: string) => Promise<SessionStatus>;
+  sendCancel: (sessionId: string) => Promise<void>;
   sendKeys: (sessionId: string, keys: string[]) => Promise<void>;
   createSession: (name: string, cwd: string, flags?: string) => Promise<ManagedSession>;
+  closeSession: (sessionId: string) => Promise<boolean>;
+  capturePane: (target: string, lines?: number) => Promise<string>;
 }
 
 // --- Wizard state for /new interactive flow ---
@@ -57,8 +60,10 @@ export class TelegramBot {
   private getSessions: TelegramBotConfig['getSessions'];
   private getSession: TelegramBotConfig['getSession'];
   private sendPrompt: TelegramBotConfig['sendPrompt'];
+  private sendCancel: TelegramBotConfig['sendCancel'];
   private sendKeys: TelegramBotConfig['sendKeys'];
   private createSession: TelegramBotConfig['createSession'];
+  private capturePane: TelegramBotConfig['capturePane'];
   private wizardState: WizardState | null = null;
 
   constructor(config: TelegramBotConfig) {
@@ -67,8 +72,10 @@ export class TelegramBot {
     this.getSessions = config.getSessions;
     this.getSession = config.getSession;
     this.sendPrompt = config.sendPrompt;
+    this.sendCancel = config.sendCancel;
     this.sendKeys = config.sendKeys;
     this.createSession = config.createSession;
+    this.capturePane = config.capturePane;
 
     this.bot = new Bot(config.token);
 
@@ -86,10 +93,13 @@ export class TelegramBot {
     // In forum mode session topics, intercept /commands and forward them
     // as prompts to Claude Code (e.g. /compact, /status, /clear).
     // Without this, grammY's command handlers would eat them.
+    // Exception: /close is our own bot command handled below.
     this.bot.use(async (ctx, next) => {
       if (
         this.forumMode && this.topicManager &&
         ctx.message?.text?.startsWith('/') &&
+        !ctx.message.text.startsWith('/close') &&
+        !ctx.message.text.startsWith('/stop') &&
         ctx.message.message_thread_id &&
         ctx.message.message_thread_id !== TELEGRAM_GENERAL_TOPIC_ID &&
         this.topicManager.getSessionId(ctx.message.message_thread_id)
@@ -106,6 +116,8 @@ export class TelegramBot {
     this.bot.command('bind', (ctx) => this.handleBind(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
     this.bot.command('new', (ctx) => this.handleNew(ctx));
+    this.bot.command('close', (ctx) => this.handleClose(ctx));
+    this.bot.command('stop', (ctx) => this.handleStopCommand(ctx));
     this.bot.command('help', (ctx) => this.handleHelp(ctx));
 
     // Callback query handler (inline keyboard button presses)
@@ -330,17 +342,100 @@ export class TelegramBot {
         '/new &lt;path&gt; \u2014 Create session at path\n' +
         '/bind &lt;name&gt; \u2014 Set active session by name or ID\n' +
         '/status \u2014 Show active session details\n' +
+        '/stop \u2014 Cancel current task (Ctrl+C)\n' +
+        '/close \u2014 Delete this topic (in a session topic)\n' +
         '/help \u2014 This message\n\n' +
         '<b>Usage</b>\n\n' +
         (this.forumMode
           ? 'Each session gets its own topic. Send messages in a session topic to deliver prompts. '
           : 'Text messages are sent as prompts to the active session. ') +
+        'Messages sent while Claude is working are queued and processed when ready. ' +
+        'Prefix with <code>!</code> to interrupt and send immediately.\n\n' +
         'Use the inline buttons on permission notifications to approve or reject.',
       {
         parse_mode: 'HTML',
         ...(threadId ? { message_thread_id: threadId } : {}),
       },
     );
+  }
+
+  // ---- /stop command: cancel current task ----
+
+  private async handleStopCommand(ctx: Context): Promise<void> {
+    if (!this.isAuthorized(ctx)) return;
+
+    const threadId = ctx.message?.message_thread_id;
+    const replyOpts = threadId ? { message_thread_id: threadId } : {};
+
+    // Resolve session (forum: from topic, DM: active session)
+    let sessionId: string | null = null;
+    if (this.forumMode && this.topicManager && threadId && threadId !== TELEGRAM_GENERAL_TOPIC_ID) {
+      sessionId = this.topicManager.getSessionId(threadId) || null;
+    } else {
+      sessionId = this.activeSessionId;
+    }
+
+    if (!sessionId) {
+      await ctx.reply('No session to stop.', replyOpts);
+      return;
+    }
+
+    const session = this.getSession(sessionId);
+    if (!session || session.status === 'offline') {
+      await ctx.reply('Session is offline.', replyOpts);
+      return;
+    }
+
+    try {
+      // Escape (dismiss TUI modals) + Ctrl+C (cancel active tasks)
+      await this.sendKeys(sessionId, ['Escape']);
+      await this.sendCancel(sessionId);
+      await ctx.reply('\u23F9 Cancelled.', replyOpts);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await ctx.reply(`Failed: ${fmt.escapeHtml(message)}`, { parse_mode: 'HTML', ...replyOpts });
+    }
+  }
+
+  // ---- /close command: delete topic ----
+
+  private async handleClose(ctx: Context): Promise<void> {
+    if (!this.isAuthorized(ctx)) return;
+
+    const threadId = ctx.message?.message_thread_id;
+
+    if (!this.forumMode || !this.topicManager) {
+      await ctx.reply('This command only works in forum mode.');
+      return;
+    }
+
+    if (!threadId || threadId === TELEGRAM_GENERAL_TOPIC_ID) {
+      await ctx.reply('Use /close inside a session topic to delete it.', {
+        ...(threadId ? { message_thread_id: threadId } : {}),
+      });
+      return;
+    }
+
+    const sessionId = this.topicManager.getSessionId(threadId);
+    if (!sessionId) {
+      await ctx.reply('This topic is not linked to a session.', {
+        message_thread_id: threadId,
+      });
+      return;
+    }
+
+    // Kill the tmux window and remove the session
+    await this.config.closeSession(sessionId);
+
+    // Clean up event buffers for this session
+    const timer = this.eventFlushTimers.get(sessionId);
+    if (timer) {
+      clearTimeout(timer);
+      this.eventFlushTimers.delete(sessionId);
+    }
+    this.eventBuffer.delete(sessionId);
+
+    await this.topicManager.deleteTopic(sessionId);
   }
 
   // ---- /new command: create session ----
@@ -921,23 +1016,90 @@ export class TelegramBot {
     const resolved = await this.resolveSessionFromCtx(ctx);
     if (!resolved) return;
     const { sessionId, session, threadId } = resolved;
+    const replyOpts = { parse_mode: 'HTML' as const, ...(threadId ? { message_thread_id: threadId } : {}) };
+
+    // ! prefix = interrupt then send immediately
+    // Sends Escape (dismiss modals like /usage, /status) + Ctrl+C (cancel running task)
+    const isInterrupt = text.startsWith('!') && text.length > 1;
+    if (isInterrupt) {
+      text = text.slice(1).trimStart();
+      try {
+        // Escape first (dismisses TUI modals), then Ctrl+C (cancels active tasks)
+        await this.sendKeys(sessionId, ['Escape']);
+        await this.sendCancel(sessionId);
+        // Brief pause for Claude Code to process
+        await new Promise(r => setTimeout(r, 500));
+      } catch {
+        // Best-effort — continue sending regardless
+      }
+    }
+
+    const isSlashCmd = text.startsWith('/');
+    const tmuxTarget = session.tmuxTarget;
+
+    // Capture pane before for slash command output diffing
+    let paneBefore = '';
+    if (isSlashCmd && tmuxTarget) {
+      try { paneBefore = await this.capturePane(tmuxTarget); } catch { /* ok */ }
+    }
 
     try {
-      await this.sendPrompt(sessionId, text);
+      const sendStatus = await this.sendPrompt(sessionId, text);
       const name = fmt.getDisplayName(session);
-      const reply = this.forumMode
-        ? '\u2192 sent'
-        : `\u2192 sent to <b>${fmt.escapeHtml(name)}</b>`;
-      await ctx.reply(reply, {
-        parse_mode: 'HTML',
-        ...(threadId ? { message_thread_id: threadId } : {}),
-      });
+
+      // Status-aware feedback
+      let reply: string;
+      if (isInterrupt) {
+        reply = this.forumMode
+          ? '\u26A1 interrupted \u2192 sent'
+          : `\u26A1 interrupted \u2192 sent to <b>${fmt.escapeHtml(name)}</b>`;
+      } else if (sendStatus === 'working') {
+        reply = this.forumMode
+          ? '\u23F3 queued (Claude is working)'
+          : `\u23F3 queued for <b>${fmt.escapeHtml(name)}</b> (working)`;
+      } else {
+        reply = this.forumMode
+          ? '\u2192 sent'
+          : `\u2192 sent to <b>${fmt.escapeHtml(name)}</b>`;
+      }
+      await ctx.reply(reply, replyOpts);
+
+      // For slash commands: capture pane output after a delay and send it back
+      if (isSlashCmd && tmuxTarget) {
+        setTimeout(async () => {
+          try {
+            const paneAfter = await this.capturePane(tmuxTarget);
+            const strip = (s: string) => s.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').replace(/\x1B\][^\x07]*\x07/g, '');
+            const beforeLines = strip(paneBefore).split('\n');
+            const afterLines = strip(paneAfter).split('\n');
+
+            let commonPrefix = 0;
+            while (commonPrefix < beforeLines.length && commonPrefix < afterLines.length
+              && beforeLines[commonPrefix] === afterLines[commonPrefix]) {
+              commonPrefix++;
+            }
+            const newLines = afterLines.slice(commonPrefix)
+              .filter(l => l.trim() !== '')
+              .join('\n').trim();
+
+            if (newLines) {
+              const snippet = newLines.length > 3500 ? newLines.slice(0, 3500) + '\n[... truncated]' : newLines;
+              const topicId = this.forumMode && this.topicManager
+                ? this.topicManager.getTopicId(sessionId)
+                : undefined;
+              await this.sendMessage(
+                `<pre>${fmt.escapeHtml(snippet)}</pre>`,
+                { topicId: topicId ?? undefined, silent: true },
+              );
+            }
+          } catch (err) {
+            console.error('[Telegram] Failed to capture slash command output:', err);
+          }
+        }, 1500);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await ctx.reply(`Failed: ${fmt.escapeHtml(message)}`, {
-        parse_mode: 'HTML',
-        ...(threadId ? { message_thread_id: threadId } : {}),
-      });
+      await ctx.reply(`Failed: ${fmt.escapeHtml(message)}`, replyOpts);
     }
   }
 
