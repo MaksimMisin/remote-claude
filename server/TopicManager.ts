@@ -279,6 +279,22 @@ export class TopicManager {
     }
   }
 
+  /**
+   * Update the stored base name for a session's topic (e.g. after user renames in Telegram).
+   * Also updates the lastTitle cache so the next updateTopicTitle() doesn't revert it.
+   */
+  updateStoredName(sessionId: string, name: string): void {
+    const entry = this.store.topics[sessionId];
+    if (!entry) return;
+    entry.name = name;
+    // Update lastTitle cache to match what Telegram currently shows.
+    // The topic title in Telegram is "emoji name" — but we don't know which emoji
+    // the user kept, so just clear the cache. The next updateTopicTitle() will
+    // re-set it with the correct emoji + new name.
+    this.lastTitle.delete(sessionId);
+    this.save();
+  }
+
   /** Last title set per topic — avoids redundant API calls. */
   private lastTitle = new Map<string, string>();
 

@@ -654,6 +654,7 @@ if (TELEGRAM_BOT_TOKEN && TELEGRAM_CHAT_ID) {
     sendCancel: (id) => sessionManager.sendCancel(id),
     sendKeys: (id, keys) => sessionManager.sendKeys(id, keys),
     closeSession: (id) => sessionManager.close(id),
+    renameSession: async (id, name) => !!(await sessionManager.rename(id, name)),
     createSession: (name, cwd, flags) => sessionManager.create(name, cwd, flags),
     capturePane: (target, lines) => capturePane(target, lines),
   });
