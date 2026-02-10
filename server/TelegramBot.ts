@@ -5,6 +5,8 @@
 // ============================================================
 
 import { Bot, InlineKeyboard, type Context } from 'grammy';
+import { autoRetry } from '@grammyjs/auto-retry';
+import { apiThrottler } from '@grammyjs/transformer-throttler';
 import type { ClaudeEvent, ManagedSession, SessionStatus } from '../shared/types.js';
 import { TELEGRAM_GENERAL_TOPIC_ID, TELEGRAM_MESSAGE_LIMIT } from '../shared/defaults.js';
 import { TopicManager } from './TopicManager.js';
@@ -67,6 +69,8 @@ export class TelegramBot {
   private wizardState: WizardState | null = null;
   /** Per-session count of messages sent while Claude was working (queue depth estimate). */
   private queueCounters = new Map<string, number>();
+  /** Per-session timers for delayed idle notifications (skip transient idle at tool boundaries). */
+  private pendingIdleNotifications = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(config: TelegramBotConfig) {
     this.config = config;
@@ -80,6 +84,11 @@ export class TelegramBot {
     this.capturePane = config.capturePane;
 
     this.bot = new Bot(config.token);
+
+    // Rate limiting: throttler queues to stay under Telegram's 20/min group limit,
+    // auto-retry catches any 429s that slip through.
+    this.bot.api.config.use(apiThrottler());
+    this.bot.api.config.use(autoRetry({ maxRetryAttempts: 3, maxDelaySeconds: 30 }));
 
     this.registerHandlers();
   }
@@ -389,8 +398,7 @@ export class TelegramBot {
     }
 
     try {
-      // Escape (dismiss TUI modals) + Ctrl+C (cancel active tasks)
-      await this.sendKeys(sessionId, ['Escape']);
+      // sendCancel sends Escape twice (Claude Code's interrupt key)
       await this.sendCancel(sessionId);
       await ctx.reply('\u23F9 Cancelled.', replyOpts);
     } catch (err) {
@@ -1032,15 +1040,13 @@ export class TelegramBot {
     const replyOpts = { parse_mode: 'HTML' as const, ...(threadId ? { message_thread_id: threadId } : {}) };
 
     // ! prefix = interrupt then send immediately
-    // Sends Escape (dismiss modals like /usage, /status) + Ctrl+C (cancel running task)
     const isInterrupt = text.startsWith('!') && text.length > 1;
     if (isInterrupt) {
       text = text.slice(1).trimStart();
       try {
-        // Escape first (dismisses TUI modals), then Ctrl+C (cancels active tasks)
-        await this.sendKeys(sessionId, ['Escape']);
+        // sendCancel sends Escape twice (Claude Code's interrupt key)
         await this.sendCancel(sessionId);
-        // Brief pause for Claude Code to process
+        // Brief pause for Claude Code to process the interrupt
         await new Promise(r => setTimeout(r, 500));
       } catch {
         // Best-effort — continue sending regardless
@@ -1065,27 +1071,25 @@ export class TelegramBot {
       const sendStatus = await this.sendPrompt(sessionId, text);
       const name = fmt.getDisplayName(session);
 
-      // Status-aware feedback with queue position tracking
-      let reply: string;
+      // Status-aware feedback — only confirm interrupts and queued messages.
+      // Normal "→ sent" is dropped to save API budget (user just sent it, they know).
       if (isInterrupt) {
         this.queueCounters.delete(sessionId);
-        reply = this.forumMode
+        const reply = this.forumMode
           ? '\u26A1 interrupted \u2192 sent'
           : `\u26A1 interrupted \u2192 sent to <b>${fmt.escapeHtml(name)}</b>`;
+        await ctx.reply(reply, replyOpts);
       } else if (sendStatus === 'working') {
         const pos = (this.queueCounters.get(sessionId) || 0) + 1;
         this.queueCounters.set(sessionId, pos);
         const posLabel = pos > 1 ? ` #${pos}` : '';
-        reply = this.forumMode
+        const reply = this.forumMode
           ? `\u23F3 queued${posLabel} (Claude is working)`
           : `\u23F3 queued${posLabel} for <b>${fmt.escapeHtml(name)}</b>`;
+        await ctx.reply(reply, replyOpts);
       } else {
         this.queueCounters.delete(sessionId);
-        reply = this.forumMode
-          ? '\u2192 sent'
-          : `\u2192 sent to <b>${fmt.escapeHtml(name)}</b>`;
       }
-      await ctx.reply(reply, replyOpts);
 
       // For slash commands: capture pane output after a delay and send it back
       if (isSlashCmd && tmuxTarget) {
@@ -1269,6 +1273,14 @@ export class TelegramBot {
       .trim()
       .slice(0, 3500);
 
+    // Cancel any pending idle notification for this session
+    // (e.g., if session went idle then immediately back to working)
+    const pendingIdle = this.pendingIdleNotifications.get(session.id);
+    if (pendingIdle) {
+      clearTimeout(pendingIdle);
+      this.pendingIdleNotifications.delete(session.id);
+    }
+
     // Reset queue counter when session stops working
     if (prevStatus === 'working' && session.status !== 'working') {
       this.queueCounters.delete(session.id);
@@ -1310,19 +1322,29 @@ export class TelegramBot {
       this.flushEventBuffer(session.id);
     }
 
-    // working -> idle
+    // working -> idle: delay notification by 3s to skip transient idle at tool boundaries.
+    // If session goes back to working within 3s, the timer is cancelled (see top of method).
     if (prevStatus === 'working' && session.status === 'idle') {
-      if (session.lastMarker?.category === 'question') {
-        await this.sendMessage(
-          fmt.formatSessionQuestion(name, markerMsg || 'Has a question'),
-          { topicId },
-        );
-      } else {
-        await this.sendMessage(
-          fmt.formatSessionFinished(name, snippet, markerMsg),
-          { topicId },
-        );
-      }
+      const capturedMarkerCategory = session.lastMarker?.category;
+      const idleTimer = setTimeout(async () => {
+        this.pendingIdleNotifications.delete(session.id);
+        // Verify session is still idle (may have changed during the delay)
+        const currentSession = this.getSession(session.id);
+        if (!currentSession || currentSession.status !== 'idle') return;
+
+        if (capturedMarkerCategory === 'question') {
+          await this.sendMessage(
+            fmt.formatSessionQuestion(name, markerMsg || 'Has a question'),
+            { topicId },
+          );
+        } else {
+          await this.sendMessage(
+            fmt.formatSessionFinished(name, snippet, markerMsg),
+            { topicId },
+          );
+        }
+      }, 3000);
+      this.pendingIdleNotifications.set(session.id, idleTimer);
     }
 
     // any -> waiting (permission prompt)
@@ -1533,11 +1555,13 @@ export class TelegramBot {
     buf.push(line);
     this.eventBuffer.set(session.id, buf);
 
-    // Schedule 3-second batch flush
+    // Schedule 10-second batch flush with per-session random stagger (0-3s)
+    // to prevent all sessions from flushing at the same instant.
     if (!this.eventFlushTimers.has(session.id)) {
+      const stagger = Math.random() * 3000;
       this.eventFlushTimers.set(session.id, setTimeout(() => {
         this.flushEventBuffer(session.id);
-      }, 3000));
+      }, 10000 + stagger));
     }
   }
 

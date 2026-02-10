@@ -9,6 +9,8 @@
     "setup": "tsx bin/setup.ts"
   },
   "dependencies": {
+    "@grammyjs/auto-retry": "^2.0.2",
+    "@grammyjs/transformer-throttler": "^1.2.1",
     "chokidar": "^4.0.0",
     "grammy": "^1.39.3",
     "web-push": "^3.6.7",

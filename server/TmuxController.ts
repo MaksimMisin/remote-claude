@@ -127,7 +127,11 @@ export async function sendPrompt(tmuxSession: string, text: string): Promise<voi
 
 export async function sendCancel(tmuxSession: string): Promise<void> {
   validateTarget(tmuxSession);
-  await execFileAsync('tmux', ['send-keys', '-t', tmuxSession, 'C-c']);
+  // Escape is Claude Code's interrupt key (not Ctrl-C which the raw-mode TUI
+  // catches as a keypress without propagating SIGINT). Send twice for reliability.
+  await execFileAsync('tmux', ['send-keys', '-t', tmuxSession, 'Escape']);
+  await sleep(150);
+  await execFileAsync('tmux', ['send-keys', '-t', tmuxSession, 'Escape']);
 }
 
 export async function getWindowName(target: string): Promise<string> {
