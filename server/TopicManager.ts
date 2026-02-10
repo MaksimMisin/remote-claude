@@ -7,6 +7,10 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { TELEGRAM_TOPICS_FILE } from '../shared/defaults.js';
 import { getStatusEmoji } from './telegram-format.js';
 
+function sleep(ms: number): Promise<void> {
+  return new Promise(r => setTimeout(r, ms));
+}
+
 interface TopicEntry {
   topicId: number;
   name: string;
@@ -27,6 +31,8 @@ export class TopicManager {
   private pending = new Map<string, Promise<number | undefined>>();
   /** Initial prompt text waiting for topic creation (race: event arrives before topic). */
   private pendingInitialPrompt = new Map<string, string>();
+  /** Per-session debounce timers for topic title updates. */
+  private titleDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(chatId: string, api: Api) {
     this.chatId = chatId;
@@ -249,6 +255,7 @@ export class TopicManager {
     console.log(`[Topics] Cleaning up ${closed.length} closed topic(s)...`);
     for (const [sessionId] of closed) {
       await this.deleteTopic(sessionId);
+      await sleep(3000);
     }
   }
 
@@ -268,6 +275,7 @@ export class TopicManager {
     for (const [sessionId, entry] of stale) {
       console.log(`[Topics] Closing stale topic ${entry.topicId} "${entry.name}" (session ${sessionId})`);
       await this.closeTopic(sessionId);
+      await sleep(3000);
     }
   }
 
@@ -291,7 +299,6 @@ export class TopicManager {
 
     // Skip if unchanged
     if (this.lastTitle.get(sessionId) === title) return;
-    this.lastTitle.set(sessionId, title);
 
     // Update base name in store
     if (entry.name !== displayName) {
@@ -299,21 +306,36 @@ export class TopicManager {
       this.save();
     }
 
-    try {
-      await this.api.editForumTopic(this.chatId, entry.topicId, { name: title });
-    } catch (err) {
-      const msg = (err as Error).message || String(err);
-      if (msg.includes('TOPIC_ID_INVALID')) {
-        console.log(`[Topics] Topic ${entry.topicId} no longer exists, removing stale entry for session ${sessionId}`);
-        delete this.store.topics[sessionId];
+    // Debounce: cancel any pending update, schedule new one in 5s.
+    // This prevents rapid idle↔working emoji flipping from burning API budget.
+    const existing = this.titleDebounceTimers.get(sessionId);
+    if (existing) clearTimeout(existing);
+
+    this.titleDebounceTimers.set(sessionId, setTimeout(async () => {
+      this.titleDebounceTimers.delete(sessionId);
+      // Re-check entry still exists and title still needs updating
+      const currentEntry = this.store.topics[sessionId];
+      if (!currentEntry || currentEntry.closed) return;
+      if (this.lastTitle.get(sessionId) === title) return;
+
+      try {
+        await this.api.editForumTopic(this.chatId, currentEntry.topicId, { name: title });
+        this.lastTitle.set(sessionId, title);
+      } catch (err) {
+        const msg = (err as Error).message || String(err);
+        if (msg.includes('TOPIC_ID_INVALID')) {
+          console.log(`[Topics] Topic ${currentEntry.topicId} no longer exists, removing stale entry for session ${sessionId}`);
+          delete this.store.topics[sessionId];
+          this.lastTitle.delete(sessionId);
+          this.save();
+          return;
+        }
         this.lastTitle.delete(sessionId);
-        this.save();
-        return;
+        console.warn(
+          `[Topics] Failed to update topic title ${currentEntry.topicId}:`, msg,
+        );
       }
-      console.warn(
-        `[Topics] Failed to update topic title ${entry.topicId}:`, msg,
-      );
-    }
+    }, 5000));
   }
 
   // -----------------------------------------------------------
