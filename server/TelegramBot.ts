@@ -33,6 +33,7 @@ export interface TelegramBotConfig {
   createSession: (name: string, cwd: string, flags?: string) => Promise<ManagedSession>;
   closeSession: (sessionId: string) => Promise<boolean>;
   capturePane: (target: string, lines?: number) => Promise<string>;
+  renameSession: (sessionId: string, name: string) => Promise<boolean>;
 }
 
 // --- Wizard state for /new interactive flow ---
@@ -66,6 +67,7 @@ export class TelegramBot {
   private sendKeys: TelegramBotConfig['sendKeys'];
   private createSession: TelegramBotConfig['createSession'];
   private capturePane: TelegramBotConfig['capturePane'];
+  private renameSession: TelegramBotConfig['renameSession'];
   private wizardState: WizardState | null = null;
   /** Per-session count of messages sent while Claude was working (queue depth estimate). */
   private queueCounters = new Map<string, number>();
@@ -82,6 +84,7 @@ export class TelegramBot {
     this.sendKeys = config.sendKeys;
     this.createSession = config.createSession;
     this.capturePane = config.capturePane;
+    this.renameSession = config.renameSession;
 
     this.bot = new Bot(config.token);
 
@@ -140,6 +143,9 @@ export class TelegramBot {
     // Photo and document handlers (file upload)
     this.bot.on('message:photo', (ctx) => this.handlePhotoMessage(ctx));
     this.bot.on('message:document', (ctx) => this.handleDocumentMessage(ctx));
+
+    // Forum topic renamed by user in Telegram → rename session locally
+    this.bot.on('message:forum_topic_edited', (ctx) => this.handleTopicRenamed(ctx));
   }
 
   // ---- Authorization guard ----
@@ -456,6 +462,32 @@ export class TelegramBot {
           });
         }
       }
+    }
+  }
+
+  // ---- Forum topic renamed by user ----
+
+  private async handleTopicRenamed(ctx: Context): Promise<void> {
+    if (!this.isAuthorized(ctx)) return;
+    if (!this.forumMode || !this.topicManager) return;
+
+    const threadId = ctx.message?.message_thread_id;
+    const newName = ctx.message?.forum_topic_edited?.name;
+    if (!threadId || !newName) return;
+
+    const sessionId = this.topicManager.getSessionId(threadId);
+    if (!sessionId) return;
+
+    // Strip status emoji prefix (e.g. "🟢 my-project" → "my-project")
+    const cleanName = newName.replace(/^[\p{Emoji}\p{Emoji_Presentation}\uFE0F]+\s*/u, '').trim();
+    if (!cleanName) return;
+
+    // Rename session locally (same as web dashboard rename)
+    const ok = await this.renameSession(sessionId, cleanName);
+    if (ok) {
+      // Update TopicManager's stored name so it doesn't fight back
+      this.topicManager.updateStoredName(sessionId, cleanName);
+      console.log(`[Telegram] Topic rename → session ${sessionId} renamed to "${cleanName}"`);
     }
   }
 
