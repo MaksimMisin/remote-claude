@@ -247,6 +247,7 @@ export class SessionManager {
       if (session && session.status !== 'offline') {
         console.log(`[SessionManager] session_end timer fired — marking ${sessionId} offline (pane ${tmuxTarget})`);
         session.status = 'offline';
+        session.claudeExited = true;
         session.currentTool = undefined;
         session.currentToolInput = undefined;
         this.onSessionUpdate(session);
@@ -450,6 +451,7 @@ export class SessionManager {
       case 'session_start':
         session.status = 'idle';
         session.claudeSessionId = event.sessionId;
+        session.claudeExited = false;
         session.currentToolInput = undefined;
         session.permissionRequest = undefined;
         // Cancel any pending session_end → offline timer for this pane
@@ -565,7 +567,7 @@ export class SessionManager {
         }
       }
 
-      if (isAlive) {
+      if (isAlive && !session.claudeExited) {
         if (session.status === 'offline') {
           session.status = 'idle';
           session.lastActivity = Date.now();
@@ -573,7 +575,8 @@ export class SessionManager {
           changed = true;
         }
       } else {
-        // Pane is gone — mark offline first, remove after grace period
+        // Pane is gone (or Claude exited but shell is still alive) — mark offline,
+        // remove after grace period.
         if (session.status !== 'offline') {
           session.status = 'offline';
           session.currentTool = undefined;
