@@ -124,11 +124,17 @@ One-time setup:
 **Naming:** Topic name = session display name (e.g. "bot debug", "ai-mvp").
 Topic icon = status emoji (optional, if API supports custom emoji).
 
-**Session offline:** Don't close the topic immediately -- session may come back.
-After a configurable timeout (e.g. 30 minutes), close the topic.
-Closed topics are still visible but move to the bottom of the list.
+**Session offline:** Topic is closed (locked, red emoji). Happens after a 5s
+`session_end` timer or when the tmux pane dies (health check).
 
-**Session removed from dashboard:** Close the topic. User can manually delete.
+**Session replaced (same pane):** When `/clear` or a clean-context plan restart
+creates a new Claude session on the same pane, the topic is **transferred** —
+not deleted and recreated. This is critical: `onSessionReplaced` transfers the
+topic mapping, `onSessionRemoved` is NOT called. The user sees one continuous
+topic for the lifetime of a tmux pane, regardless of how many Claude sessions
+run in it.
+
+**Session removed from dashboard:** Topic is deleted entirely.
 
 ### Topic naming and display names
 
@@ -367,9 +373,9 @@ Telegram should EXCEED the web dashboard's capabilities:
    auto > fallback). Auto name tracks tmux window title, propagated to
    Telegram topics on change. See "Topic naming and display names" above.
 
-2. **Topic reuse.** If a session goes offline and comes back (e.g. server
-   restart), should it reuse the existing topic? Probably yes -- match by
-   session display name or tmux target.
+2. ~~**Topic reuse.**~~ Resolved: topics are transferred on session replacement
+   (same pane). One continuous topic per tmux pane, across /clear, plan
+   restarts, and server restarts (via `closeStaleTopics` + reopen).
 
 3. **Notification grouping.** If 3 sessions finish within seconds, should we
    batch into one pinned-message update, or send 3 separate updates? The

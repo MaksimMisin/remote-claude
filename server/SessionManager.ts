@@ -313,17 +313,19 @@ export class SessionManager {
     // Skip if this Claude session was recently closed/dismissed (exit hooks race)
     if (!session && event.sessionId && event.sessionId !== 'unknown' && !this.recentlyClosedClaudeIds.has(event.sessionId)) {
       // Deduplicate by tmuxTarget: if another session already points to the
-      // same pane, replace it (new Claude process reused the pane)
+      // same pane, replace it (new Claude process reused the pane).
+      // IMPORTANT: do NOT call onSessionRemoved here — that would delete the
+      // Telegram topic before onSessionReplaced can transfer it.  The frontend
+      // removal broadcast is handled via onSessionReplaced instead.
       let replacedSessionId: string | undefined;
       if (event.tmuxTarget) {
         // Cancel any pending session_end → offline timer for this pane
         this.cancelSessionEndTimer(event.tmuxTarget);
         for (const [existingId, existing] of this.sessions.entries()) {
           if (existing.tmuxTarget === event.tmuxTarget && existing.claudeSessionId !== event.sessionId) {
-            console.log(`[SessionManager] Replacing stale session ${existingId} on pane ${event.tmuxTarget}`);
+            console.log(`[SessionManager] Replacing session ${existingId} on pane ${event.tmuxTarget}`);
             replacedSessionId = existingId;
             this.sessions.delete(existingId);
-            this.onSessionRemoved(existingId);
             break;
           }
         }

@@ -166,6 +166,8 @@ const sessionManager = new SessionManager(
     }
   },
   (oldSessionId, newSessionId, newSession) => {
+    // Notify frontend the old session is gone (replaced, not deleted)
+    broadcast({ type: 'session_removed', payload: { sessionId: oldSessionId } });
     // Transfer Telegram topic from old session to new session (auto-continue on same pane)
     if (telegramBot) {
       telegramBot.onSessionReplaced(oldSessionId, newSessionId, newSession).catch((err) => {
