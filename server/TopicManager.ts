@@ -200,6 +200,16 @@ export class TopicManager {
     const entry = this.store.topics[sessionId];
     if (!entry || entry.closed) return;
 
+    // Update title to offline emoji before closing so it doesn't look alive
+    const offlineEmoji = getStatusEmoji('offline');
+    const offlineTitle = `${offlineEmoji} ${entry.name}`;
+    try {
+      await this.api.editForumTopic(this.chatId, entry.topicId, { name: offlineTitle });
+      this.lastTitle.set(sessionId, offlineTitle);
+    } catch {
+      // Best-effort — continue with close even if title update fails
+    }
+
     try {
       await this.api.closeForumTopic(this.chatId, entry.topicId);
       entry.closed = true;
@@ -210,10 +220,16 @@ export class TopicManager {
     } catch (err) {
       const msg = (err as Error).message || String(err);
       // Topic was already deleted from Telegram — clean up our stale reference
-      if (msg.includes('TOPIC_ID_INVALID') || msg.includes('TOPIC_NOT_MODIFIED')) {
+      if (msg.includes('TOPIC_ID_INVALID')) {
         console.log(`[Topics] Topic ${entry.topicId} no longer exists, removing stale entry for session ${sessionId}`);
         delete this.store.topics[sessionId];
         this.lastTitle.delete(sessionId);
+        this.save();
+        return;
+      }
+      // Already closed — just mark it in our store
+      if (msg.includes('TOPIC_NOT_MODIFIED')) {
+        entry.closed = true;
         this.save();
         return;
       }
@@ -233,17 +249,96 @@ export class TopicManager {
       console.log(
         `[Topics] Deleted topic ${entry.topicId} for session ${sessionId}`,
       );
+      // Successfully deleted — remove from store
+      delete this.store.topics[sessionId];
+      this.lastTitle.delete(sessionId);
+      this.pendingInitialPrompt.delete(sessionId);
+      this.save();
     } catch (err) {
-      console.warn(
-        `[Topics] Failed to delete topic ${entry.topicId}:`,
-        (err as Error).message || err,
-      );
+      const msg = (err as Error).message || String(err);
+      if (msg.includes('TOPIC_ID_INVALID')) {
+        // Already gone from Telegram — clean up store
+        console.log(`[Topics] Topic ${entry.topicId} already deleted, cleaning store`);
+        delete this.store.topics[sessionId];
+        this.lastTitle.delete(sessionId);
+        this.pendingInitialPrompt.delete(sessionId);
+        this.save();
+      } else {
+        // Delete failed (no permission, etc.) — fall back to close so we don't orphan it
+        console.warn(
+          `[Topics] Failed to delete topic ${entry.topicId}, falling back to close:`, msg,
+        );
+        await this.closeTopic(sessionId);
+      }
     }
-    // Remove from store regardless — if API failed, the topic is orphaned anyway
-    delete this.store.topics[sessionId];
-    this.lastTitle.delete(sessionId);
-    this.pendingInitialPrompt.delete(sessionId);
-    this.save();
+  }
+
+  /**
+   * Fix emoji on all closed topics in the store.
+   * Retroactively sets 🔴 on topics that were closed before this fix existed.
+   * Called on startup during syncTopics.
+   */
+  async fixClosedEmojis(): Promise<void> {
+    const offlineEmoji = getStatusEmoji('offline');
+    const closed = Object.entries(this.store.topics).filter(
+      ([, e]) => e.closed,
+    );
+    if (closed.length === 0) return;
+    console.log(`[Topics] Fixing emoji on ${closed.length} closed topic(s)...`);
+    for (const [sessionId, entry] of closed) {
+      const expectedTitle = `${offlineEmoji} ${entry.name}`;
+      // Skip if we already set it (lastTitle cache won't survive restarts, so always try)
+      try {
+        await this.api.editForumTopic(this.chatId, entry.topicId, { name: expectedTitle });
+        this.lastTitle.set(sessionId, expectedTitle);
+        console.log(`[Topics] Fixed emoji on topic ${entry.topicId} "${entry.name}"`);
+      } catch (err) {
+        const msg = (err as Error).message || String(err);
+        if (msg.includes('TOPIC_NOT_MODIFIED')) {
+          // Already correct — skip
+        } else if (msg.includes('TOPIC_ID_INVALID')) {
+          console.log(`[Topics] Topic ${entry.topicId} no longer exists, removing`);
+          delete this.store.topics[sessionId];
+          this.lastTitle.delete(sessionId);
+          this.save();
+        } else {
+          console.warn(`[Topics] Failed to fix emoji on topic ${entry.topicId}:`, msg);
+        }
+      }
+      await sleep(3000);
+    }
+  }
+
+  /**
+   * Close an untracked topic by its Telegram thread ID.
+   * Sets 🔴 emoji and closes (or deletes) the topic.
+   * Used by /close command for orphaned topics not in our store.
+   */
+  async closeUntrackedTopic(topicId: number): Promise<void> {
+    // Try to set offline emoji first
+    const offlineEmoji = getStatusEmoji('offline');
+    try {
+      // We don't know the topic name, so fetch it won't work via Bot API.
+      // editForumTopic with just a name prefix — best effort.
+      // Actually we can't get the current name, so just prepend 🔴
+      // and hope Telegram replaces it. Let's try to rename to "🔴 closed".
+      // Better: Telegram editForumTopic can update just the name.
+      await this.api.editForumTopic(this.chatId, topicId, { name: `${offlineEmoji} closed` });
+    } catch {
+      // Best effort
+    }
+
+    try {
+      await this.api.deleteForumTopic(this.chatId, topicId);
+      console.log(`[Topics] Deleted untracked topic ${topicId}`);
+    } catch {
+      try {
+        await this.api.closeForumTopic(this.chatId, topicId);
+        console.log(`[Topics] Closed untracked topic ${topicId}`);
+      } catch (err) {
+        console.warn(`[Topics] Failed to close untracked topic ${topicId}:`, (err as Error).message);
+      }
+    }
   }
 
   /** Delete all closed (inactive) topics from Telegram and the store. */
@@ -273,6 +368,12 @@ export class TopicManager {
     }
     console.log(`[Topics] Closing ${stale.length} stale topic(s)...`);
     for (const [sessionId, entry] of stale) {
+      // Cancel any pending title update that might overwrite the offline emoji
+      const pendingTimer = this.titleDebounceTimers.get(sessionId);
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        this.titleDebounceTimers.delete(sessionId);
+      }
       console.log(`[Topics] Closing stale topic ${entry.topicId} "${entry.name}" (session ${sessionId})`);
       await this.closeTopic(sessionId);
       await sleep(3000);
