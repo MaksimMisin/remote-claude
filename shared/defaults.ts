@@ -2,6 +2,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 export const DATA_DIR = join(homedir(), '.remote-claude', 'data');
+export const LOGS_DIR = join(DATA_DIR, 'logs');
 export const HOOKS_DIR = join(homedir(), '.remote-claude', 'hooks');
 export const EVENTS_FILE = join(DATA_DIR, 'events.jsonl');
 export const SESSIONS_FILE = join(DATA_DIR, 'sessions.json');
