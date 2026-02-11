@@ -11,6 +11,7 @@ import {
   HEALTH_CHECK_INTERVAL_MS,
   WORKING_TIMEOUT_MS,
   SESSION_OFFLINE_GRACE_MS,
+  SESSION_END_OFFLINE_DELAY_MS,
 } from '../shared/defaults.js';
 import type { ManagedSession, ClaudeEvent, SessionStatus } from '../shared/types.js';
 import * as tmux from './TmuxController.js';
@@ -23,6 +24,9 @@ export class SessionManager {
   private onSessionReplaced: (oldSessionId: string, newSessionId: string, newSession: ManagedSession) => void;
   /** claudeSessionIds of recently closed/dismissed sessions — prevents auto-re-discovery from exit hooks */
   private recentlyClosedClaudeIds = new Set<string>();
+  /** Timers that mark sessions offline after session_end, unless a session_start cancels them.
+   *  Keyed by tmuxTarget so /clear and clean-context plan restarts cancel the timer. */
+  private sessionEndTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
     onSessionUpdate: (session: ManagedSession) => void | Promise<void>,
@@ -232,6 +236,34 @@ export class SessionManager {
     }
   }
 
+  /** Start a timer that marks a session offline after session_end.
+   *  If a session_start arrives on the same pane before the timer fires
+   *  (/clear, clean-context plan restart), the timer is cancelled. */
+  private startSessionEndTimer(sessionId: string, tmuxTarget: string): void {
+    this.cancelSessionEndTimer(tmuxTarget);
+    const timer = setTimeout(() => {
+      this.sessionEndTimers.delete(tmuxTarget);
+      const session = this.sessions.get(sessionId);
+      if (session && session.status !== 'offline') {
+        console.log(`[SessionManager] session_end timer fired — marking ${sessionId} offline (pane ${tmuxTarget})`);
+        session.status = 'offline';
+        session.currentTool = undefined;
+        session.currentToolInput = undefined;
+        this.onSessionUpdate(session);
+        this.save();
+      }
+    }, SESSION_END_OFFLINE_DELAY_MS);
+    this.sessionEndTimers.set(tmuxTarget, timer);
+  }
+
+  private cancelSessionEndTimer(tmuxTarget: string): void {
+    const timer = this.sessionEndTimers.get(tmuxTarget);
+    if (timer) {
+      clearTimeout(timer);
+      this.sessionEndTimers.delete(tmuxTarget);
+    }
+  }
+
   /** Resolve the tmux target for a session (tmuxTarget > tmuxSession). */
   private resolveTarget(session: ManagedSession): string {
     const target = session.tmuxTarget || session.tmuxSession;
@@ -284,6 +316,8 @@ export class SessionManager {
       // same pane, replace it (new Claude process reused the pane)
       let replacedSessionId: string | undefined;
       if (event.tmuxTarget) {
+        // Cancel any pending session_end → offline timer for this pane
+        this.cancelSessionEndTimer(event.tmuxTarget);
         for (const [existingId, existing] of this.sessions.entries()) {
           if (existing.tmuxTarget === event.tmuxTarget && existing.claudeSessionId !== event.sessionId) {
             console.log(`[SessionManager] Replacing stale session ${existingId} on pane ${event.tmuxTarget}`);
@@ -416,12 +450,22 @@ export class SessionManager {
         session.claudeSessionId = event.sessionId;
         session.currentToolInput = undefined;
         session.permissionRequest = undefined;
+        // Cancel any pending session_end → offline timer for this pane
+        if (session.tmuxTarget) {
+          this.cancelSessionEndTimer(session.tmuxTarget);
+        }
         break;
       case 'session_end':
         session.status = 'idle';
         session.currentTool = undefined;
         session.currentToolInput = undefined;
         session.permissionRequest = undefined;
+        // Start a timer to mark offline — if a session_start arrives on the same
+        // pane (e.g. /clear, clean-context plan), it cancels the timer.  Otherwise
+        // the session went away (/exit, Ctrl+D) and should go offline.
+        if (session.tmuxTarget) {
+          this.startSessionEndTimer(session.id, session.tmuxTarget);
+        }
         break;
     }
 

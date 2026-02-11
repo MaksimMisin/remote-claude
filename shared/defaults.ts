@@ -12,6 +12,7 @@ export const SERVER_PORT = 4080;
 export const HEALTH_CHECK_INTERVAL_MS = 5000;
 export const WORKING_TIMEOUT_MS = 300_000; // 5 min — then verify via tmux pane
 export const SESSION_OFFLINE_GRACE_MS = 30_000;
+export const SESSION_END_OFFLINE_DELAY_MS = 5_000; // delay before marking offline after session_end
 export const MAX_HISTORY_EVENTS = 200;
 export const WS_PING_INTERVAL_MS = 30_000;
 

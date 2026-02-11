@@ -136,9 +136,11 @@ Static file serving from `public/` directory.
 | `stop` | -> idle |
 | `notification` | -> waiting |
 | `session_start` | -> idle |
-| `session_end` | -> idle |
+| `session_end` | -> idle, then offline after 5s (see below) |
 
-**Health checks** (every 5s): Queries `tmux list-sessions` to verify session's tmux session is still alive. For auto-discovered sessions, extracts tmux session name from `tmuxTarget`. Marks unreachable sessions as `offline`.
+**Session end timer:** On `session_end`, a 5-second timer starts. If no `session_start` arrives on the same tmux pane before it fires, the session is marked `offline`. This catches `/exit` and Ctrl+D (where Claude quits but the shell keeps the pane alive). The timer is cancelled by `/clear` and clean-context plan restarts, which fire `session_end` → `session_start` within ~100ms.
+
+**Health checks** (every 5s): Queries `tmux list-panes` to verify the session's tmux pane still exists. Marks unreachable sessions as `offline`. This is the fallback for pane/window kills where `session_end` may not fire.
 
 **Working timeout:** If a session stays in `working` for >2 minutes without events, transitions to `idle`.
 
