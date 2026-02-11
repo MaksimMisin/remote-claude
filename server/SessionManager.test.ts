@@ -41,6 +41,7 @@ vi.mock('./TmuxController.js', () => ({
 }));
 
 import { SessionManager } from './SessionManager.js';
+import * as tmux from './TmuxController.js';
 import type { ClaudeEvent, ManagedSession } from '../shared/types.js';
 
 // --- Helpers ---
@@ -260,9 +261,10 @@ describe('SessionManager — session_end offline timer', () => {
     vi.advanceTimersByTime(4_000);
     expect(sm.list()[0].status).toBe('idle');
 
-    // After 5s total — now offline
+    // After 5s total — now offline with claudeExited flag
     vi.advanceTimersByTime(1_000);
     expect(sm.list()[0].status).toBe('offline');
+    expect(sm.list()[0].claudeExited).toBe(true);
   });
 
   it('cancels the offline timer when session_start arrives on same pane', () => {
@@ -363,5 +365,112 @@ describe('SessionManager — multiple replacements preserve continuity', () => {
     // No offline after waiting
     vi.advanceTimersByTime(30_000);
     expect(sm.list()[0].status).not.toBe('offline');
+  });
+});
+
+describe('SessionManager — health check respects claudeExited', () => {
+  let sm: SessionManager;
+  let removals: string[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removals = [];
+    sm = new SessionManager(
+      () => {},
+      (id) => { removals.push(id); },
+    );
+  });
+
+  afterEach(() => {
+    sm.stopHealthChecks();
+    vi.useRealTimers();
+  });
+
+  it('does NOT revive a session after /exit even if pane is alive', async () => {
+    // Session starts on a pane
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'hc-exit-1111-2222-333333333333',
+      tmuxTarget: 'Personal:3.0',
+    }));
+    expect(sm.list()[0].status).toBe('idle');
+
+    // /exit → session_end → timer fires → offline + claudeExited
+    sm.handleEvent(makeEvent({
+      type: 'session_end',
+      sessionId: 'hc-exit-1111-2222-333333333333',
+      tmuxTarget: 'Personal:3.0',
+    }));
+    vi.advanceTimersByTime(5_000);
+    expect(sm.list()[0].status).toBe('offline');
+    expect(sm.list()[0].claudeExited).toBe(true);
+
+    // Health check: pane IS alive (shell still running)
+    vi.mocked(tmux.listPanes).mockResolvedValueOnce(['Personal:3.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValueOnce(['Personal']);
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    // Session must STAY offline — health check must not revive it
+    const session = sm.list().find(s => s.tmuxTarget === 'Personal:3.0');
+    expect(session).toBeDefined();
+    expect(session!.status).toBe('offline');
+  });
+
+  it('removes session after grace period even when pane is alive (claudeExited)', async () => {
+    // Session starts
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'hc-rm-11111-2222-333333333333',
+      tmuxTarget: 'Personal:4.0',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    // /exit → offline + claudeExited
+    sm.handleEvent(makeEvent({
+      type: 'session_end',
+      sessionId: 'hc-rm-11111-2222-333333333333',
+      tmuxTarget: 'Personal:4.0',
+    }));
+    vi.advanceTimersByTime(5_000);
+    expect(sm.list()[0].status).toBe('offline');
+
+    // Fast-forward past the grace period (30s).
+    // Each health check needs the mock — set up for multiple calls.
+    vi.mocked(tmux.listPanes).mockResolvedValue(['Personal:4.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValue(['Personal']);
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(35_000);
+
+    // Session should be removed — onSessionRemoved called
+    expect(removals).toContain(sessionId);
+    expect(sm.list().find(s => s.id === sessionId)).toBeUndefined();
+  });
+
+  it('/clear does NOT set claudeExited — health check can revive', () => {
+    // Session starts
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'hc-clr-1111-2222-333333333333',
+      tmuxTarget: 'Dev:0.0',
+    }));
+
+    // /clear: session_end → session_start
+    sm.handleEvent(makeEvent({
+      type: 'session_end',
+      sessionId: 'hc-clr-1111-2222-333333333333',
+      tmuxTarget: 'Dev:0.0',
+    }));
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'hc-clr-5555-6666-777777777777',
+      tmuxTarget: 'Dev:0.0',
+    }));
+
+    // New session should NOT have claudeExited
+    const session = sm.list().find(s => s.tmuxTarget === 'Dev:0.0');
+    expect(session).toBeDefined();
+    expect(session!.claudeExited).toBeFalsy();
+    expect(session!.status).toBe('idle');
   });
 });
