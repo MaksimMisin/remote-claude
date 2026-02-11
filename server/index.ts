@@ -3,6 +3,9 @@
 // HTTP server, WebSocket, startup
 // ============================================================
 
+import { initLogger } from './Logger.js';
+initLogger();
+
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { readFileSync, existsSync, writeFileSync, readdirSync } from 'node:fs';
 import { join, extname, resolve } from 'node:path';
