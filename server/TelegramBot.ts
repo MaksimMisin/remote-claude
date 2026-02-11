@@ -1526,15 +1526,23 @@ export class TelegramBot {
   }
 
   /**
-   * Called when a session is replaced on the same pane (e.g., auto-continue).
-   * Transfers the old session's topic to the new session so events stay in
-   * the same Telegram topic.
+   * Called when a session is replaced on the same pane (e.g., /clear,
+   * clean-context plan restart).  Transfers the old session's topic to the
+   * new session so all events stay in the same Telegram topic.
    */
   async onSessionReplaced(oldSessionId: string, newSessionId: string, session: ManagedSession): Promise<void> {
     if (!this.forumMode || !this.topicManager) return;
 
-    const transferred = this.topicManager.transferTopic(oldSessionId, newSessionId);
-    if (transferred) {
+    const entry = this.topicManager.transferTopic(oldSessionId, newSessionId);
+    if (entry) {
+      // Reopen the topic if it was closed (e.g. session_end timer raced)
+      if (entry.closed) {
+        try {
+          await this.topicManager.reopenTopic(newSessionId);
+        } catch (err) {
+          console.warn(`[Telegram] Failed to reopen transferred topic:`, (err as Error).message);
+        }
+      }
       // Flush any pending event buffer under the old session ID
       const oldBuf = this.eventBuffer.get(oldSessionId);
       if (oldBuf && oldBuf.length > 0) {

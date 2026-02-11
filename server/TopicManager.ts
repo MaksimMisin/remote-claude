@@ -11,7 +11,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise(r => setTimeout(r, ms));
 }
 
-interface TopicEntry {
+export interface TopicEntry {
   topicId: number;
   name: string;
   closed?: boolean;
@@ -179,12 +179,15 @@ export class TopicManager {
     return undefined;
   }
 
-  /** Transfer a topic from one session to another (e.g., auto-continue on same pane). */
-  transferTopic(fromSessionId: string, toSessionId: string): boolean {
+  /** Transfer a topic from one session to another (e.g., auto-continue on same pane).
+   *  Returns the entry if transferred, or null if not found. */
+  transferTopic(fromSessionId: string, toSessionId: string): TopicEntry | null {
     const entry = this.store.topics[fromSessionId];
-    if (!entry) return false;
+    if (!entry) return null;
     // Move the entry to the new key, reset initial prompt so new session's first prompt is captured
     delete entry.initialPrompt;
+    // Clear closed flag — the new session is alive
+    entry.closed = false;
     this.store.topics[toSessionId] = entry;
     delete this.store.topics[fromSessionId];
     this.lastTitle.delete(fromSessionId);
@@ -192,7 +195,27 @@ export class TopicManager {
     console.log(
       `[Topics] Transferred topic ${entry.topicId} from session ${fromSessionId} → ${toSessionId}`,
     );
-    return true;
+    return entry;
+  }
+
+  /** Reopen a closed topic (e.g., after transfer if it raced with session_end timer). */
+  async reopenTopic(sessionId: string): Promise<void> {
+    const entry = this.store.topics[sessionId];
+    if (!entry || !entry.closed) return;
+    try {
+      await this.api.reopenForumTopic(this.chatId, entry.topicId);
+      entry.closed = false;
+      this.save();
+      console.log(`[Topics] Reopened topic ${entry.topicId} for session ${sessionId}`);
+    } catch (err) {
+      const msg = (err as Error).message || String(err);
+      if (msg.includes('TOPIC_NOT_MODIFIED')) {
+        entry.closed = false;
+        this.save();
+        return;
+      }
+      console.warn(`[Topics] Failed to reopen topic ${entry.topicId}:`, msg);
+    }
   }
 
   /** Close a forum topic and mark it closed in the store. */
