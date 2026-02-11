@@ -175,10 +175,10 @@ export function formatSessionQuestion(
 
 /** Status emoji mapping. */
 const STATUS_EMOJI: Record<string, string> = {
-  idle: '\uD83D\uDFE2',
-  working: '\uD83D\uDD35',
-  waiting: '\uD83D\uDFE1',
-  offline: '\uD83D\uDD34',
+  idle: '\uD83D\uDFE2',       // 🟢 green = done/idle
+  working: '\u270F\uFE0F',    // ✏️ pencil = actively writing
+  waiting: '\uD83D\uDFE1',    // 🟡 yellow = needs attention
+  offline: '\uD83D\uDD34',    // 🔴 red = dead
 };
 
 /** Get status emoji for a session status. */

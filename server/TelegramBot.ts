@@ -113,6 +113,7 @@ export class TelegramBot {
         this.forumMode && this.topicManager &&
         ctx.message?.text?.startsWith('/') &&
         !ctx.message.text.startsWith('/close') &&
+        !ctx.message.text.startsWith('/purge') &&
         !ctx.message.text.startsWith('/stop') &&
         ctx.message.message_thread_id &&
         ctx.message.message_thread_id !== TELEGRAM_GENERAL_TOPIC_ID &&
@@ -131,6 +132,7 @@ export class TelegramBot {
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
     this.bot.command('new', (ctx) => this.handleNew(ctx));
     this.bot.command('close', (ctx) => this.handleClose(ctx));
+    this.bot.command('purge', (ctx) => this.handlePurge(ctx));
     this.bot.command('stop', (ctx) => this.handleStopCommand(ctx));
     this.bot.command('help', (ctx) => this.handleHelp(ctx));
 
@@ -361,6 +363,7 @@ export class TelegramBot {
         '/status \u2014 Show active session details\n' +
         '/stop \u2014 Cancel current task (Ctrl+C)\n' +
         '/close \u2014 Close session and delete topic\n' +
+        '/purge \u2014 Delete all closed topics\n' +
         '/help \u2014 This message\n\n' +
         '<b>Usage</b>\n\n' +
         (this.forumMode
@@ -447,22 +450,27 @@ export class TelegramBot {
 
       await this.topicManager.deleteTopic(sessionId);
     } else {
-      // Untracked topic — just delete it directly from Telegram
-      try {
-        await this.bot.api.deleteForumTopic(this.chatId, threadId);
-        console.log(`[Telegram] Deleted untracked topic ${threadId}`);
-      } catch {
-        // deleteForumTopic may fail — try closing instead
-        try {
-          await this.bot.api.closeForumTopic(this.chatId, threadId);
-          console.log(`[Telegram] Closed untracked topic ${threadId}`);
-        } catch (err2) {
-          await ctx.reply(`Failed to close topic: ${(err2 as Error).message}`, {
-            message_thread_id: threadId,
-          });
-        }
-      }
+      // Untracked topic — set 🔴, then delete/close it
+      await this.topicManager.closeUntrackedTopic(threadId);
     }
+  }
+
+  // ---- /purge command: bulk delete closed topics ----
+
+  private async handlePurge(ctx: Context): Promise<void> {
+    if (!this.isAuthorized(ctx)) return;
+
+    if (!this.forumMode || !this.topicManager) {
+      await ctx.reply('This command only works in forum mode.');
+      return;
+    }
+
+    const threadId = ctx.message?.message_thread_id;
+    const replyOpts = threadId ? { message_thread_id: threadId } : {};
+
+    await ctx.reply('Purging closed topics...', replyOpts);
+    await this.topicManager.deleteClosedTopics();
+    await ctx.reply('Done. Use /close inside orphaned topics to clean those too.', replyOpts);
   }
 
   // ---- Forum topic renamed by user ----
@@ -869,7 +877,13 @@ export class TelegramBot {
 
       const sessionId = this.topicManager.getSessionId(threadId);
       if (!sessionId) {
-        await ctx.reply('This topic is not linked to a session.', { message_thread_id: threadId });
+        // Orphaned topic — offer a close button for easy cleanup
+        const keyboard = new InlineKeyboard()
+          .text('\uD83D\uDDD1 Close this topic', `closetopic:${threadId}`);
+        await ctx.reply('Orphaned topic \u2014 no linked session.', {
+          message_thread_id: threadId,
+          reply_markup: keyboard,
+        });
         return null;
       }
 
@@ -1187,13 +1201,24 @@ export class TelegramBot {
       return;
     }
 
-    const [action, sessionId] = data.split(':');
-    if (!sessionId) {
+    const [action, actionArg] = data.split(':');
+    if (!actionArg) {
       await ctx.answerCallbackQuery({ text: 'Invalid action' });
       return;
     }
 
     try {
+      // Handle orphaned topic close button
+      if (action === 'closetopic' && this.topicManager) {
+        const topicId = parseInt(actionArg, 10);
+        await ctx.answerCallbackQuery({ text: 'Closing...' });
+        await this.topicManager.closeUntrackedTopic(topicId);
+        try { await ctx.editMessageText('Topic closed.'); } catch { /* ok */ }
+        return;
+      }
+
+      const sessionId = actionArg;
+
       switch (action) {
         case 'bind': {
           const session = this.getSession(sessionId);
@@ -1305,10 +1330,12 @@ export class TelegramBot {
       .trim()
       .slice(0, 3500);
 
-    // Cancel any pending idle notification for this session
-    // (e.g., if session went idle then immediately back to working)
+    // Cancel any pending idle notification if session is no longer idle
+    // (e.g., went back to working before the 3s delay expired).
+    // Don't cancel if still idle — health checks / meta updates re-trigger
+    // onStatusChange with idle→idle and would silently eat the notification.
     const pendingIdle = this.pendingIdleNotifications.get(session.id);
-    if (pendingIdle) {
+    if (pendingIdle && session.status !== 'idle') {
       clearTimeout(pendingIdle);
       this.pendingIdleNotifications.delete(session.id);
     }
@@ -1475,6 +1502,8 @@ export class TelegramBot {
         .map(s => s.id),
     );
     await this.topicManager.closeStaleTopics(activeIds);
+    // Fix emoji on topics that were closed before the emoji-on-close fix existed
+    await this.topicManager.fixClosedEmojis();
   }
 
   /**
