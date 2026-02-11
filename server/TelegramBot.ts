@@ -1317,6 +1317,20 @@ export class TelegramBot {
     return undefined;
   }
 
+  // ---- Display name change handler (called from index.ts) ----
+
+  /**
+   * Called when a session's display name changes (e.g. tmux window renamed by hook).
+   * Updates the Telegram topic title to reflect the new name.
+   */
+  async onDisplayNameChange(session: ManagedSession): Promise<void> {
+    if (!this.forumMode || !this.topicManager) return;
+    const displayName = fmt.getDisplayName(session);
+    const topicId = this.topicManager.getTopicId(session.id);
+    if (!topicId) return;
+    await this.topicManager.updateTopicTitle(session.id, session.status, displayName);
+  }
+
   // ---- Status change handler (called from index.ts) ----
 
   /**

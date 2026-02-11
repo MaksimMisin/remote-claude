@@ -18,6 +18,7 @@ import { SessionManager } from './SessionManager.js';
 import { EventProcessor } from './EventProcessor.js';
 import { PushManager } from './PushManager.js';
 import { TelegramBot } from './TelegramBot.js';
+import { getDisplayName } from './telegram-format.js';
 import { capturePane } from './TmuxController.js';
 import { mkdirSync } from 'node:fs';
 
@@ -97,6 +98,8 @@ const eventProcessor = new EventProcessor((event: ClaudeEvent) => {
 
 /** Track previous session statuses for notification transitions */
 const prevStatuses = new Map<string, string>();
+/** Track previous display names to detect name changes (tmux window renames, etc.) */
+const prevDisplayNames = new Map<string, string>();
 
 // --- Telegram bot (optional) ---
 
@@ -114,9 +117,16 @@ const sessionManager = new SessionManager(
     const prev = prevStatuses.get(session.id) as import('../shared/types.js').SessionStatus | undefined;
     prevStatuses.set(session.id, session.status);
 
-    const name = session.customName || session.name;
+    const name = getDisplayName(session);
     const snippet = session.lastAssistantText
       ?.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim().slice(0, 200) || '';
+
+    // Detect display name changes (e.g. tmux window renamed by hook)
+    const prevName = prevDisplayNames.get(session.id);
+    prevDisplayNames.set(session.id, name);
+    if (telegramBot && prevName && prevName !== name) {
+      await telegramBot.onDisplayNameChange(session);
+    }
 
     // Push notifications
     if (prev === 'working' && session.status === 'waiting') {
@@ -149,6 +159,7 @@ const sessionManager = new SessionManager(
   },
   (sessionId) => {
     broadcast({ type: 'session_removed', payload: { sessionId } });
+    prevDisplayNames.delete(sessionId);
     // Notify Telegram to close/delete the topic for this removed session
     if (telegramBot) {
       telegramBot.onSessionRemoved(sessionId).catch(() => {});
@@ -161,11 +172,16 @@ const sessionManager = new SessionManager(
         console.error('[Telegram] Topic transfer error:', err);
       });
     }
-    // Transfer prevStatuses tracking
+    // Transfer tracking maps
     const oldStatus = prevStatuses.get(oldSessionId);
     if (oldStatus) {
       prevStatuses.set(newSessionId, oldStatus);
       prevStatuses.delete(oldSessionId);
+    }
+    const oldName = prevDisplayNames.get(oldSessionId);
+    if (oldName) {
+      prevDisplayNames.set(newSessionId, oldName);
+      prevDisplayNames.delete(oldSessionId);
     }
   },
 );

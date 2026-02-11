@@ -130,6 +130,44 @@ Closed topics are still visible but move to the bottom of the list.
 
 **Session removed from dashboard:** Close the topic. User can manually delete.
 
+### Topic naming and display names
+
+Each session has two name slots:
+
+- **Auto name** (`windowName`) — passively mirrors the tmux window title. Updated
+  by the health check every ~10s. Includes both hook-generated LLM summaries
+  (e.g. `🤖 auth fix`) and manual tmux renames. Not sticky — changes freely.
+- **Pinned name** (`customName`) — set only from a Telegram topic rename or a
+  Dashboard rename. Sticky until explicitly cleared.
+
+Display priority: `pinned > auto > fallback`. This is implemented in
+`telegram-format.ts:getDisplayName()` which returns `customName > windowName
+(emoji-stripped) > name`.
+
+| Scenario | Behavior |
+|---|---|
+| Hook generates LLM summary for tmux window | Auto updates, all surfaces update (if no pin) |
+| User renames Telegram topic | Sets pin, all surfaces show pinned name |
+| User renames in Dashboard | Sets pin, all surfaces show pinned name |
+| Hook fires again after pin | Auto updates silently. Pin still wins. |
+| User clears pin (empty rename) | Reverts to current auto name |
+| User manually renames tmux window | Treated as auto (same as hook) |
+
+**Propagation flow:**
+
+```
+tmux window renamed (by hook or user)
+  -> health check detects new windowName (~10s)
+  -> SessionManager.updateSession() fires onSessionUpdate callback
+  -> index.ts compares getDisplayName() against prevDisplayNames map
+  -> if changed: TelegramBot.onDisplayNameChange(session)
+    -> TopicManager.updateTopicTitle() updates topic with status emoji + new name
+```
+
+Key principle: **tmux is read-only for Remote Claude.** We never write to tmux
+window titles. Pin only from Telegram or Dashboard. Telegram topic renames
+set `customName` via `renameSession()`, which the web dashboard also uses.
+
 ### Message routing
 
 **Outbound (bot -> group):** All `sendMessage` calls include
@@ -325,9 +363,9 @@ Telegram should EXCEED the web dashboard's capabilities:
 
 ## Open Questions
 
-1. **Topic naming.** Should topics include the tmux target for disambiguation,
-   or just the display name? Display name is cleaner but may collide if two
-   sessions have the same name.
+1. ~~**Topic naming.**~~ Resolved: topics use `getDisplayName()` (pinned >
+   auto > fallback). Auto name tracks tmux window title, propagated to
+   Telegram topics on change. See "Topic naming and display names" above.
 
 2. **Topic reuse.** If a session goes offline and comes back (e.g. server
    restart), should it reuse the existing topic? Probably yes -- match by
