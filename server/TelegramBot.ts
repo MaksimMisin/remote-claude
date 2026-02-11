@@ -479,6 +479,11 @@ export class TelegramBot {
     if (!this.isAuthorized(ctx)) return;
     if (!this.forumMode || !this.topicManager) return;
 
+    // Skip edits made by the bot itself (e.g. status emoji updates from updateTopicTitle).
+    // Without this, every bot-initiated topic title change triggers a feedback loop:
+    // bot edits topic → Telegram sends forum_topic_edited → bot strips emoji → renames tmux window → emoji gone
+    if (ctx.from?.id === ctx.me.id) return;
+
     const threadId = ctx.message?.message_thread_id;
     const newName = ctx.message?.forum_topic_edited?.name;
     if (!threadId || !newName) return;
