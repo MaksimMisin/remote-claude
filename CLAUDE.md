@@ -24,6 +24,13 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - **Tmux session** = the tmux concept. Always say "tmux session" to distinguish.
 - `tmuxTarget` (e.g. `Personal:3.0`) = `tmuxSession:windowIndex.paneIndex`
 
+## Debugging
+- `RC_DEBUG=1 npm run start` -- Enable debug logging to console (always written to log file)
+- `tail -f ~/.remote-claude/data/logs/server.log` -- Watch all logs including `[DBG]` lines
+- `rc` script doesn't support env vars -- stop with `rc off`, start manually with `RC_DEBUG=1`
+- Debug logs use `console.debug()` -- `[DBG]` prefix in log file, covers full event→session→topic flow
+- Key debug prefixes: `[SessionManager]`, `[Topics]`, `[Telegram]`, `[Server]`
+
 ## Parallel Agent Notes
 - Re-read files before editing (another agent may have changed them)
 - After editing `frontend/` files, rebuild: `cd frontend && npm run build`

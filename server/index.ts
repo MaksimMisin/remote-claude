@@ -89,9 +89,12 @@ const eventProcessor = new EventProcessor((event: ClaudeEvent) => {
   if (telegramBot) {
     const session = sessionManager.findByEvent(event);
     if (session) {
+      console.debug(`[Server] Routing event ${event.type} to Telegram for session ${session.id}`);
       telegramBot.onEvent(event, session).catch((err) => {
         console.error('[Telegram] Event streaming error:', err);
       });
+    } else {
+      console.debug(`[Server] No session match for Telegram event routing: ${event.type} (claude=${event.sessionId?.slice(0, 8)})`);
     }
   }
 });
@@ -121,10 +124,13 @@ const sessionManager = new SessionManager(
     const snippet = session.lastAssistantText
       ?.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim().slice(0, 200) || '';
 
+    console.debug(`[Server] onSessionUpdate: session ${session.id} "${name}" status: ${prev} → ${session.status}`);
+
     // Detect display name changes (e.g. tmux window renamed by hook)
     const prevName = prevDisplayNames.get(session.id);
     prevDisplayNames.set(session.id, name);
     if (telegramBot && prevName && prevName !== name) {
+      console.debug(`[Server] Display name changed for ${session.id}: "${prevName}" → "${name}"`);
       await telegramBot.onDisplayNameChange(session);
     }
 
@@ -166,6 +172,7 @@ const sessionManager = new SessionManager(
     }
   },
   (oldSessionId, newSessionId, newSession) => {
+    console.debug(`[Server] onSessionReplaced: ${oldSessionId} → ${newSessionId} "${getDisplayName(newSession)}"`);
     // Notify frontend the old session is gone (replaced, not deleted)
     broadcast({ type: 'session_removed', payload: { sessionId: oldSessionId } });
     // Transfer Telegram topic from old session to new session (auto-continue on same pane)
