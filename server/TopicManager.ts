@@ -57,12 +57,18 @@ export class TopicManager {
     // Fast path: already exists
     const existing = this.store.topics[sessionId];
     if (existing && !existing.closed) {
+      console.debug(`[Topics] ensureTopic: fast path for session ${sessionId} → topic ${existing.topicId} (open)`);
       return existing.topicId;
     }
 
     // If another call is already creating this topic, wait for it
     const inflight = this.pending.get(sessionId);
-    if (inflight) return inflight;
+    if (inflight) {
+      console.debug(`[Topics] ensureTopic: waiting on inflight creation for session ${sessionId}`);
+      return inflight;
+    }
+
+    console.debug(`[Topics] ensureTopic: need to create/reopen for session ${sessionId} "${displayName}" (existing=${!!existing}, closed=${existing?.closed})`);
 
     const promise = this._ensureTopicInner(sessionId, displayName);
     this.pending.set(sessionId, promise);
@@ -183,7 +189,11 @@ export class TopicManager {
    *  Returns the entry if transferred, or null if not found. */
   transferTopic(fromSessionId: string, toSessionId: string): TopicEntry | null {
     const entry = this.store.topics[fromSessionId];
-    if (!entry) return null;
+    if (!entry) {
+      console.debug(`[Topics] transferTopic: no topic found for source session ${fromSessionId}`);
+      return null;
+    }
+    console.debug(`[Topics] transferTopic: topic ${entry.topicId} from ${fromSessionId} → ${toSessionId} (closed=${entry.closed})`);
     // Move the entry to the new key, reset initial prompt so new session's first prompt is captured
     delete entry.initialPrompt;
     // Clear closed flag — the new session is alive
@@ -221,7 +231,11 @@ export class TopicManager {
   /** Close a forum topic and mark it closed in the store. */
   async closeTopic(sessionId: string): Promise<void> {
     const entry = this.store.topics[sessionId];
-    if (!entry || entry.closed) return;
+    if (!entry || entry.closed) {
+      console.debug(`[Topics] closeTopic: skip for session ${sessionId} (exists=${!!entry}, closed=${entry?.closed})`);
+      return;
+    }
+    console.debug(`[Topics] closeTopic: closing topic ${entry.topicId} for session ${sessionId}`);
 
     // Update title to offline emoji before closing so it doesn't look alive
     const offlineEmoji = getStatusEmoji('offline');
@@ -382,6 +396,7 @@ export class TopicManager {
    * Called on startup to sync Telegram topics with active sessions.
    */
   async closeStaleTopics(activeSessionIds: Set<string>): Promise<void> {
+    console.debug(`[Topics] closeStaleTopics: active sessions = [${Array.from(activeSessionIds).join(', ')}], stored topics = [${Object.entries(this.store.topics).map(([id, e]) => `${id}:${e.closed ? 'closed' : 'open'}`).join(', ')}]`);
     const stale = Object.entries(this.store.topics).filter(
       ([sessionId, entry]) => !entry.closed && !activeSessionIds.has(sessionId),
     );
@@ -432,13 +447,21 @@ export class TopicManager {
     displayName: string,
   ): Promise<void> {
     const entry = this.store.topics[sessionId];
-    if (!entry || entry.closed) return;
+    if (!entry || entry.closed) {
+      console.debug(`[Topics] updateTopicTitle: skip for session ${sessionId} (exists=${!!entry}, closed=${entry?.closed})`);
+      return;
+    }
 
     const emoji = getStatusEmoji(status);
     const title = `${emoji} ${displayName}`;
 
     // Skip if unchanged
-    if (this.lastTitle.get(sessionId) === title) return;
+    if (this.lastTitle.get(sessionId) === title) {
+      console.debug(`[Topics] updateTopicTitle: skip unchanged title for session ${sessionId}: "${title}"`);
+      return;
+    }
+
+    console.debug(`[Topics] updateTopicTitle: scheduling for session ${sessionId}: "${title}" (was: "${this.lastTitle.get(sessionId) || 'unset'}")`);
 
     // Update base name in store
     if (entry.name !== displayName) {
@@ -488,6 +511,10 @@ export class TopicManager {
         this.store = JSON.parse(readFileSync(TELEGRAM_TOPICS_FILE, 'utf-8'));
         const count = Object.keys(this.store.topics).length;
         console.log(`[Topics] Loaded ${count} topic mappings`);
+        // Dump full topic store on startup for debugging
+        for (const [sid, entry] of Object.entries(this.store.topics)) {
+          console.debug(`[Topics]   ${sid} → topic ${entry.topicId} "${entry.name}" closed=${!!entry.closed}`);
+        }
       }
     } catch {
       // Start fresh on corruption

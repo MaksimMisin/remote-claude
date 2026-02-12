@@ -1,14 +1,14 @@
 // ============================================================
-// SessionManager tests — session replacement & session_end timer
+// SessionManager tests — session lifecycle, replacement, rename
 //
 // These tests verify that:
 // 1. /clear and clean-context plan restarts TRANSFER the session
 //    (onSessionReplaced) instead of REMOVING it (onSessionRemoved).
-//    This is critical for Telegram topic continuity.
 // 2. The session_end timer marks sessions offline after 5s
 //    when no session_start follows (e.g., /exit).
-// 3. The timer is cancelled when session_start arrives quickly
-//    (e.g., /clear, clean-context plan restart).
+// 3. The timer is cancelled when session_start arrives quickly.
+// 4. rename() sets/clears customName with correct priority.
+// 5. Health check detects tmux window name changes.
 // ============================================================
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -41,6 +41,7 @@ vi.mock('./TmuxController.js', () => ({
 }));
 
 import { SessionManager } from './SessionManager.js';
+import * as tmux from './TmuxController.js';
 import type { ClaudeEvent, ManagedSession } from '../shared/types.js';
 
 // --- Helpers ---
@@ -260,9 +261,10 @@ describe('SessionManager — session_end offline timer', () => {
     vi.advanceTimersByTime(4_000);
     expect(sm.list()[0].status).toBe('idle');
 
-    // After 5s total — now offline
+    // After 5s total — now offline with claudeExited flag
     vi.advanceTimersByTime(1_000);
     expect(sm.list()[0].status).toBe('offline');
+    expect(sm.list()[0].claudeExited).toBe(true);
   });
 
   it('cancels the offline timer when session_start arrives on same pane', () => {
@@ -363,5 +365,465 @@ describe('SessionManager — multiple replacements preserve continuity', () => {
     // No offline after waiting
     vi.advanceTimersByTime(30_000);
     expect(sm.list()[0].status).not.toBe('offline');
+  });
+});
+
+describe('SessionManager — health check respects claudeExited', () => {
+  let sm: SessionManager;
+  let removals: string[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    removals = [];
+    sm = new SessionManager(
+      () => {},
+      (id) => { removals.push(id); },
+    );
+  });
+
+  afterEach(() => {
+    sm.stopHealthChecks();
+    vi.useRealTimers();
+  });
+
+  it('does NOT revive a session after /exit even if pane is alive', async () => {
+    // Session starts on a pane
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'hc-exit-1111-2222-333333333333',
+      tmuxTarget: 'Personal:3.0',
+    }));
+    expect(sm.list()[0].status).toBe('idle');
+
+    // /exit → session_end → timer fires → offline + claudeExited
+    sm.handleEvent(makeEvent({
+      type: 'session_end',
+      sessionId: 'hc-exit-1111-2222-333333333333',
+      tmuxTarget: 'Personal:3.0',
+    }));
+    vi.advanceTimersByTime(5_000);
+    expect(sm.list()[0].status).toBe('offline');
+    expect(sm.list()[0].claudeExited).toBe(true);
+
+    // Health check: pane IS alive (shell still running)
+    vi.mocked(tmux.listPanes).mockResolvedValueOnce(['Personal:3.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValueOnce(['Personal']);
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    // Session must STAY offline — health check must not revive it
+    const session = sm.list().find(s => s.tmuxTarget === 'Personal:3.0');
+    expect(session).toBeDefined();
+    expect(session!.status).toBe('offline');
+  });
+
+  it('removes session after grace period even when pane is alive (claudeExited)', async () => {
+    // Session starts
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'hc-rm-11111-2222-333333333333',
+      tmuxTarget: 'Personal:4.0',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    // /exit → offline + claudeExited
+    sm.handleEvent(makeEvent({
+      type: 'session_end',
+      sessionId: 'hc-rm-11111-2222-333333333333',
+      tmuxTarget: 'Personal:4.0',
+    }));
+    vi.advanceTimersByTime(5_000);
+    expect(sm.list()[0].status).toBe('offline');
+
+    // Fast-forward past the grace period (30s).
+    // Each health check needs the mock — set up for multiple calls.
+    vi.mocked(tmux.listPanes).mockResolvedValue(['Personal:4.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValue(['Personal']);
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(35_000);
+
+    // Session should be removed — onSessionRemoved called
+    expect(removals).toContain(sessionId);
+    expect(sm.list().find(s => s.id === sessionId)).toBeUndefined();
+  });
+
+  it('/clear does NOT set claudeExited — health check can revive', () => {
+    // Session starts
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'hc-clr-1111-2222-333333333333',
+      tmuxTarget: 'Dev:0.0',
+    }));
+
+    // /clear: session_end → session_start
+    sm.handleEvent(makeEvent({
+      type: 'session_end',
+      sessionId: 'hc-clr-1111-2222-333333333333',
+      tmuxTarget: 'Dev:0.0',
+    }));
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'hc-clr-5555-6666-777777777777',
+      tmuxTarget: 'Dev:0.0',
+    }));
+
+    // New session should NOT have claudeExited
+    const session = sm.list().find(s => s.tmuxTarget === 'Dev:0.0');
+    expect(session).toBeDefined();
+    expect(session!.claudeExited).toBeFalsy();
+    expect(session!.status).toBe('idle');
+  });
+});
+
+// ============================================================
+// Rename flows
+// ============================================================
+
+describe('SessionManager — rename (customName)', () => {
+  let sm: SessionManager;
+  let updates: ManagedSession[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    updates = [];
+    sm = new SessionManager(
+      (session) => { updates.push({ ...session }); },
+    );
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('sets customName on the session', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'rn-aaa-1111-2222-333333333333',
+      tmuxTarget: 'Work:0.0',
+      cwd: '/tmp/project',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    const result = await sm.rename(sessionId, 'My Custom Name');
+
+    expect(result).toBeDefined();
+    expect(result!.customName).toBe('My Custom Name');
+    // onSessionUpdate fired
+    const lastUpdate = updates[updates.length - 1];
+    expect(lastUpdate.customName).toBe('My Custom Name');
+  });
+
+  it('also renames the tmux window', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'rn-bbb-1111-2222-333333333333',
+      tmuxTarget: 'Work:1.0',
+      cwd: '/tmp/project',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    await sm.rename(sessionId, 'Tmux Rename');
+
+    expect(tmux.renameWindow).toHaveBeenCalledWith('Work:1.0', 'Tmux Rename');
+  });
+
+  it('clears customName when given empty string', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'rn-ccc-1111-2222-333333333333',
+      tmuxTarget: 'Work:2.0',
+      cwd: '/tmp/project',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    // Set then clear
+    await sm.rename(sessionId, 'Pinned');
+    expect(sm.list()[0].customName).toBe('Pinned');
+
+    await sm.rename(sessionId, '');
+    expect(sm.list()[0].customName).toBeUndefined();
+  });
+
+  it('returns undefined for non-existent session', async () => {
+    const result = await sm.rename('ghost-id', 'Name');
+    expect(result).toBeUndefined();
+  });
+
+  it('customName survives session events (not overwritten by hook data)', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'rn-ddd-1111-2222-333333333333',
+      tmuxTarget: 'Work:3.0',
+      cwd: '/tmp/project',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    await sm.rename(sessionId, 'Sticky Name');
+
+    // More events come in — customName must not be cleared
+    sm.handleEvent(makeEvent({
+      type: 'user_prompt_submit',
+      sessionId: 'rn-ddd-1111-2222-333333333333',
+      tmuxTarget: 'Work:3.0',
+    }));
+    sm.handleEvent(makeEvent({
+      type: 'pre_tool_use',
+      sessionId: 'rn-ddd-1111-2222-333333333333',
+      tmuxTarget: 'Work:3.0',
+      tool: 'Bash',
+    }));
+    sm.handleEvent(makeEvent({
+      type: 'stop',
+      sessionId: 'rn-ddd-1111-2222-333333333333',
+      tmuxTarget: 'Work:3.0',
+    }));
+
+    expect(sm.list()[0].customName).toBe('Sticky Name');
+  });
+
+  it('tmux rename failure is non-fatal — customName still set', async () => {
+    vi.mocked(tmux.renameWindow).mockRejectedValueOnce(new Error('tmux: no such window'));
+
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'rn-eee-1111-2222-333333333333',
+      tmuxTarget: 'Work:4.0',
+      cwd: '/tmp/project',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    const result = await sm.rename(sessionId, 'Still Works');
+
+    expect(result).toBeDefined();
+    expect(result!.customName).toBe('Still Works');
+  });
+});
+
+// ============================================================
+// Health check — window name detection
+// ============================================================
+
+describe('SessionManager — health check window name', () => {
+  let sm: SessionManager;
+  let updates: ManagedSession[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    updates = [];
+    sm = new SessionManager(
+      (session) => { updates.push({ ...session }); },
+    );
+  });
+
+  afterEach(() => {
+    sm.stopHealthChecks();
+    vi.useRealTimers();
+  });
+
+  it('detects window name change from tmux', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'wn-aaa-1111-2222-333333333333',
+      tmuxTarget: 'Dev:0.0',
+      cwd: '/tmp/project',
+    }));
+    expect(sm.list()[0].windowName).toBeUndefined();
+
+    // Health check returns window name
+    vi.mocked(tmux.listPanes).mockResolvedValue(['Dev:0.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValue(['Dev']);
+    vi.mocked(tmux.getWindowName).mockResolvedValue('🤖 auth fix');
+
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    expect(sm.list()[0].windowName).toBe('🤖 auth fix');
+    // onSessionUpdate was called with the new name
+    const nameUpdate = updates.find(u => u.windowName === '🤖 auth fix');
+    expect(nameUpdate).toBeDefined();
+  });
+
+  it('fires onSessionUpdate when window name changes', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'wn-bbb-1111-2222-333333333333',
+      tmuxTarget: 'Dev:1.0',
+      cwd: '/tmp/project',
+    }));
+
+    vi.mocked(tmux.listPanes).mockResolvedValue(['Dev:1.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValue(['Dev']);
+
+    // First name
+    vi.mocked(tmux.getWindowName).mockResolvedValueOnce('🤖 first task');
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    updates.length = 0; // Clear previous updates
+
+    // Name changes
+    vi.mocked(tmux.getWindowName).mockResolvedValueOnce('✅ first task done');
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    expect(sm.list()[0].windowName).toBe('✅ first task done');
+    expect(updates.length).toBeGreaterThan(0);
+    expect(updates.some(u => u.windowName === '✅ first task done')).toBe(true);
+  });
+
+  it('does NOT update when window name is unchanged', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'wn-ccc-1111-2222-333333333333',
+      tmuxTarget: 'Dev:2.0',
+      cwd: '/tmp/project',
+    }));
+
+    vi.mocked(tmux.listPanes).mockResolvedValue(['Dev:2.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValue(['Dev']);
+    vi.mocked(tmux.getWindowName).mockResolvedValue('stable-name');
+
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    const updateCountAfterFirst = updates.length;
+
+    // Second health check — same name
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    // No new update for unchanged name (only status-related updates possible)
+    const nameUpdates = updates.slice(updateCountAfterFirst).filter(
+      u => u.windowName === 'stable-name',
+    );
+    // The update from windowName should not fire again
+    expect(nameUpdates.length).toBe(0);
+  });
+
+  it('does not read window name for offline sessions', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'wn-ddd-1111-2222-333333333333',
+      tmuxTarget: 'Dev:3.0',
+      cwd: '/tmp/project',
+    }));
+
+    // Pane is gone
+    vi.mocked(tmux.listPanes).mockResolvedValue([]);
+    vi.mocked(tmux.listSessions).mockResolvedValue(['Dev']);
+    vi.mocked(tmux.getWindowName).mockClear();
+
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    // getWindowName should NOT be called for dead pane
+    expect(tmux.getWindowName).not.toHaveBeenCalled();
+  });
+});
+
+// ============================================================
+// customName priority over windowName across session lifecycle
+// ============================================================
+
+describe('SessionManager — customName vs windowName priority', () => {
+  let sm: SessionManager;
+  let updates: ManagedSession[];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    updates = [];
+    sm = new SessionManager(
+      (session) => { updates.push({ ...session }); },
+    );
+  });
+
+  afterEach(() => {
+    sm.stopHealthChecks();
+    vi.useRealTimers();
+  });
+
+  it('customName is preserved when health check updates windowName', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'prio-aaa-1111-222233333333',
+      tmuxTarget: 'Work:0.0',
+      cwd: '/tmp/project',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    // Set customName (user renamed in Telegram/Dashboard)
+    await sm.rename(sessionId, 'Pinned Name');
+
+    // Health check changes windowName
+    vi.mocked(tmux.listPanes).mockResolvedValue(['Work:0.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValue(['Work']);
+    vi.mocked(tmux.getWindowName).mockResolvedValue('🤖 auto generated');
+
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    const session = sm.list()[0];
+    // windowName updated
+    expect(session.windowName).toBe('🤖 auto generated');
+    // customName NOT overwritten
+    expect(session.customName).toBe('Pinned Name');
+  });
+
+  it('clearing customName reverts display to windowName', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'prio-bbb-1111-222233333333',
+      tmuxTarget: 'Work:1.0',
+      cwd: '/tmp/project',
+    }));
+    const sessionId = sm.list()[0].id;
+
+    // Set both names
+    await sm.rename(sessionId, 'Pinned');
+
+    vi.mocked(tmux.listPanes).mockResolvedValue(['Work:1.0']);
+    vi.mocked(tmux.listSessions).mockResolvedValue(['Work']);
+    vi.mocked(tmux.getWindowName).mockResolvedValue('auto-name');
+    sm.startHealthChecks();
+    await vi.advanceTimersByTimeAsync(5_100);
+
+    // Both set
+    expect(sm.list()[0].customName).toBe('Pinned');
+    expect(sm.list()[0].windowName).toBe('auto-name');
+
+    // Clear customName
+    await sm.rename(sessionId, '');
+
+    const session = sm.list()[0];
+    expect(session.customName).toBeUndefined();
+    // windowName is still there as fallback
+    expect(session.windowName).toBe('auto-name');
+  });
+
+  it('session replacement preserves nothing — new session starts fresh', async () => {
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'prio-ccc-1111-222233333333',
+      tmuxTarget: 'Work:2.0',
+      cwd: '/tmp/project',
+    }));
+    const sessionId = sm.list()[0].id;
+    await sm.rename(sessionId, 'Old Pin');
+
+    // /clear → replacement
+    sm.handleEvent(makeEvent({
+      type: 'session_end',
+      sessionId: 'prio-ccc-1111-222233333333',
+      tmuxTarget: 'Work:2.0',
+    }));
+    sm.handleEvent(makeEvent({
+      type: 'session_start',
+      sessionId: 'prio-ddd-5555-666677777777',
+      tmuxTarget: 'Work:2.0',
+      cwd: '/tmp/project',
+    }));
+
+    const newSession = sm.list()[0];
+    // New session does NOT inherit customName from old session
+    // (Topic transfer handles naming in TelegramBot, not SessionManager)
+    expect(newSession.customName).toBeUndefined();
   });
 });

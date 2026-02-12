@@ -68,9 +68,12 @@ export function initLogger(): void {
 
   stream = openStream();
 
+  const debugEnabled = process.env.RC_DEBUG === '1' || process.env.RC_DEBUG === 'true';
+
   const origLog = console.log.bind(console);
   const origError = console.error.bind(console);
   const origWarn = console.warn.bind(console);
+  const origDebug = console.debug.bind(console);
 
   console.log = (...args: unknown[]) => {
     origLog(...args);
@@ -87,5 +90,13 @@ export function initLogger(): void {
     writeLine(`${timestamp()} [WRN] ${args.map(String).join(' ')}`);
   };
 
-  writeLine(`${timestamp()} [LOG] --- Logger initialized ---`);
+  console.debug = (...args: unknown[]) => {
+    // Always write to log file, only print to console if RC_DEBUG is enabled
+    writeLine(`${timestamp()} [DBG] ${args.map(String).join(' ')}`);
+    if (debugEnabled) {
+      origDebug(...args);
+    }
+  };
+
+  writeLine(`${timestamp()} [LOG] --- Logger initialized (debug=${debugEnabled}) ---`);
 }

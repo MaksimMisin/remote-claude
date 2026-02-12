@@ -192,11 +192,15 @@ export class TelegramBot {
     // Forum mode: ensure topics exist and update their status emoji
     if (this.forumMode && this.topicManager) {
       const sessions = this.getSessions();
+      console.debug(`[Telegram] /sessions: ${sessions.length} sessions, syncing topics...`);
       for (const s of sessions) {
         if (s.status !== 'offline') {
           const displayName = fmt.getDisplayName(s);
+          console.debug(`[Telegram] /sessions: ensuring topic for ${s.id} "${displayName}" (${s.status})`);
           await this.topicManager.ensureTopic(s.id, displayName);
           await this.topicManager.updateTopicTitle(s.id, s.status, displayName);
+        } else {
+          console.debug(`[Telegram] /sessions: skipping offline session ${s.id}`);
         }
       }
       const threadId = ctx.message?.message_thread_id;
@@ -1327,6 +1331,7 @@ export class TelegramBot {
     if (!this.forumMode || !this.topicManager) return;
     const displayName = fmt.getDisplayName(session);
     const topicId = this.topicManager.getTopicId(session.id);
+    console.debug(`[Telegram] onDisplayNameChange: session ${session.id} name="${displayName}" topicId=${topicId}`);
     if (!topicId) return;
     await this.topicManager.updateTopicTitle(session.id, session.status, displayName);
   }
@@ -1342,6 +1347,7 @@ export class TelegramBot {
     prevStatus: SessionStatus | undefined,
     session: ManagedSession,
   ): Promise<void> {
+    console.debug(`[Telegram] onStatusChange: session ${session.id} "${fmt.getDisplayName(session)}" ${prevStatus} → ${session.status} (forumMode=${this.forumMode}, hasTM=${!!this.topicManager})`);
     const name = fmt.getDisplayName(session);
     const markerMsg = session.lastMarker?.message;
     const snippet = session.lastAssistantText
@@ -1371,6 +1377,7 @@ export class TelegramBot {
       prevStatus !== 'offline' &&
       prevStatus !== undefined
     ) {
+      console.debug(`[Telegram] ${prevStatus} → offline for session ${session.id}, closing topic`);
       if (prevStatus === 'working') {
         this.flushEventBuffer(session.id);
       }
@@ -1386,11 +1393,13 @@ export class TelegramBot {
     // If topic creation fails, skip notification — never fall through to General
     let topicId: number | undefined;
     if (this.forumMode && this.topicManager) {
+      console.debug(`[Telegram] Ensuring topic for session ${session.id} "${name}" (status=${session.status})`);
       topicId = await this.topicManager.ensureTopic(session.id, name);
       if (!topicId) {
         console.warn(`[Telegram] No topic for session ${session.id}, skipping notification`);
         return;
       }
+      console.debug(`[Telegram] Got topic ${topicId} for session ${session.id}, updating title`);
       // Update topic title with status emoji
       await this.topicManager.updateTopicTitle(session.id, session.status, name);
     }
@@ -1403,6 +1412,7 @@ export class TelegramBot {
     // working -> idle: delay notification by 3s to skip transient idle at tool boundaries.
     // If session goes back to working within 3s, the timer is cancelled (see top of method).
     if (prevStatus === 'working' && session.status === 'idle') {
+      console.debug(`[Telegram] Scheduling 3s delayed idle notification for session ${session.id} (marker=${session.lastMarker?.category})`);
       const capturedMarkerCategory = session.lastMarker?.category;
       const idleTimer = setTimeout(async () => {
         this.pendingIdleNotifications.delete(session.id);
@@ -1427,6 +1437,7 @@ export class TelegramBot {
 
     // any -> waiting (permission prompt)
     if (session.status === 'waiting' && prevStatus !== 'waiting') {
+      console.debug(`[Telegram] ${prevStatus} → waiting for session ${session.id}, sending permission notification (topic=${topicId})`);
       // Auto-bind in DM mode
       if (!this.forumMode) {
         this.activeSessionId = session.id;
@@ -1498,9 +1509,11 @@ export class TelegramBot {
    * Closes the topic and posts a brief summary to General.
    */
   async onSessionRemoved(sessionId: string, session?: ManagedSession): Promise<void> {
+    console.debug(`[Telegram] onSessionRemoved: session ${sessionId} (forumMode=${this.forumMode})`);
     if (!this.forumMode || !this.topicManager) return;
 
     const topicId = this.topicManager.getTopicId(sessionId);
+    console.debug(`[Telegram] onSessionRemoved: session ${sessionId} has topicId=${topicId}`);
     if (!topicId) return;
 
     // Delete the topic entirely
@@ -1515,11 +1528,14 @@ export class TelegramBot {
   async syncTopics(): Promise<void> {
     if (!this.forumMode || !this.topicManager) return;
 
+    const allSessions = this.getSessions();
     const activeIds = new Set(
-      this.getSessions()
+      allSessions
         .filter(s => s.status !== 'offline')
         .map(s => s.id),
     );
+    console.debug(`[Telegram] syncTopics: ${allSessions.length} total sessions, ${activeIds.size} active: [${Array.from(activeIds).join(', ')}]`);
+    console.debug(`[Telegram] syncTopics: all sessions: ${allSessions.map(s => `${s.id}(${s.status})`).join(', ')}`);
     await this.topicManager.closeStaleTopics(activeIds);
     // Fix emoji on topics that were closed before the emoji-on-close fix existed
     await this.topicManager.fixClosedEmojis();
@@ -1531,6 +1547,7 @@ export class TelegramBot {
    * new session so all events stay in the same Telegram topic.
    */
   async onSessionReplaced(oldSessionId: string, newSessionId: string, session: ManagedSession): Promise<void> {
+    console.debug(`[Telegram] onSessionReplaced: ${oldSessionId} → ${newSessionId} "${fmt.getDisplayName(session)}" (forumMode=${this.forumMode})`);
     if (!this.forumMode || !this.topicManager) return;
 
     const entry = this.topicManager.transferTopic(oldSessionId, newSessionId);
@@ -1572,6 +1589,7 @@ export class TelegramBot {
   async onEvent(event: ClaudeEvent, session: ManagedSession): Promise<void> {
     // Only stream in forum mode (topics give per-session context)
     if (!this.forumMode || !this.topicManager) return;
+    console.debug(`[Telegram] onEvent: ${event.type} for session ${session.id} (topic=${this.topicManager.getTopicId(session.id) ?? 'none'})`);
 
     let line: string | undefined;
 
@@ -1663,14 +1681,24 @@ export class TelegramBot {
     // Pop buffer
     const lines = this.eventBuffer.get(sessionId);
     this.eventBuffer.delete(sessionId);
-    if (!lines || lines.length === 0) return;
+    if (!lines || lines.length === 0) {
+      console.debug(`[Telegram] flushEventBuffer: empty buffer for session ${sessionId}`);
+      return;
+    }
 
     // Get topic
     const session = this.getSession(sessionId);
-    if (!session) return;
+    if (!session) {
+      console.debug(`[Telegram] flushEventBuffer: session ${sessionId} not found, dropping ${lines.length} lines`);
+      return;
+    }
     const topicId = this.topicManager?.getTopicId(sessionId);
-    if (!topicId) return;
+    if (!topicId) {
+      console.debug(`[Telegram] flushEventBuffer: no topic for session ${sessionId}, dropping ${lines.length} lines`);
+      return;
+    }
 
+    console.debug(`[Telegram] flushEventBuffer: sending ${lines.length} lines to topic ${topicId} for session ${sessionId}`);
     // Send as one message
     const html = lines.join('\n');
     await this.sendMessage(html, { topicId, silent: true });

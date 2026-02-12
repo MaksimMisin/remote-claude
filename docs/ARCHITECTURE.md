@@ -147,11 +147,11 @@ Static file serving from `public/` directory.
 | `session_start` | -> idle |
 | `session_end` | -> idle, then offline after 5s (see below) |
 
-**Session end timer:** On `session_end`, a 5-second timer starts. If no `session_start` arrives on the same tmux pane before it fires, the session is marked `offline`. This catches `/exit` and Ctrl+D (where Claude quits but the shell keeps the pane alive). The timer is cancelled by `/clear` and clean-context plan restarts, which fire `session_end` → `session_start` within ~100ms.
+**Session end timer:** On `session_end`, a 5-second timer starts. If no `session_start` arrives on the same tmux pane before it fires, the session is marked `offline` with `claudeExited = true`. This catches `/exit` and Ctrl+D (where Claude quits but the shell keeps the pane alive). The timer is cancelled by `/clear` and clean-context plan restarts, which fire `session_end` → `session_start` within ~100ms. On `session_start`, `claudeExited` is always reset to `false`.
 
 **Session replacement (same pane):** When a new Claude session appears on a pane that already has a session (e.g., `/clear`, clean-context plan restart), the old session is replaced. **Critical:** `onSessionRemoved` is NOT called during replacement — only `onSessionReplaced`. This ensures Telegram topics are transferred (not deleted and recreated). The topic stays the same; only the internal session ID changes.
 
-**Health checks** (every 5s): Queries `tmux list-panes` to verify the session's tmux pane still exists. Marks unreachable sessions as `offline`. This is the fallback for pane/window kills where `session_end` may not fire.
+**Health checks** (every 5s): Queries `tmux list-panes` to verify the session's tmux pane still exists. If the pane is gone, marks the session `offline`. If the pane is alive but `claudeExited` is true, the session stays offline (prevents health check from reviving a session where Claude exited but the shell is still running). After `SESSION_OFFLINE_GRACE_MS` (30s), offline sessions are removed entirely.
 
 **Working timeout:** If a session stays in `working` for >2 minutes without events, transitions to `idle`.
 
@@ -318,6 +318,7 @@ interface ManagedSession {
   gitBranch?: string;      // Current git branch from hook events
   gitDirty?: boolean;      // Whether working tree has uncommitted changes
   totalTokens?: number;    // Cumulative token usage
+  claudeExited?: boolean;  // Set by session_end timer — prevents health check revival
 }
 ```
 
