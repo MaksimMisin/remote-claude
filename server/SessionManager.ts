@@ -124,15 +124,22 @@ export class SessionManager {
   findByEvent(event: ClaudeEvent): ManagedSession | undefined {
     // First try exact Claude session ID match
     for (const s of this.sessions.values()) {
-      if (s.claudeSessionId && s.claudeSessionId === event.sessionId) return s;
+      if (s.claudeSessionId && s.claudeSessionId === event.sessionId) {
+        console.debug(`[SessionManager] findByEvent: matched event ${event.type} (claude=${event.sessionId?.slice(0, 8)}) → session ${s.id} by claudeSessionId`);
+        return s;
+      }
     }
     // CWD match ONLY for server-created sessions awaiting their first event
     // (have tmuxSession but no claudeSessionId yet). Without this guard, a
     // second Claude launched in the same project directory would have its
     // events stolen by the first session instead of being auto-discovered.
     for (const s of this.sessions.values()) {
-      if (s.tmuxSession && !s.claudeSessionId && s.cwd === event.cwd && s.status !== 'offline') return s;
+      if (s.tmuxSession && !s.claudeSessionId && s.cwd === event.cwd && s.status !== 'offline') {
+        console.debug(`[SessionManager] findByEvent: matched event ${event.type} (claude=${event.sessionId?.slice(0, 8)}) → session ${s.id} by cwd=${event.cwd}`);
+        return s;
+      }
     }
+    console.debug(`[SessionManager] findByEvent: no match for event ${event.type} (claude=${event.sessionId?.slice(0, 8)}, cwd=${event.cwd}, tmux=${event.tmuxTarget})`);
     return undefined;
   }
 
@@ -240,6 +247,7 @@ export class SessionManager {
    *  If a session_start arrives on the same pane before the timer fires
    *  (/clear, clean-context plan restart), the timer is cancelled. */
   private startSessionEndTimer(sessionId: string, tmuxTarget: string): void {
+    console.debug(`[SessionManager] Starting session_end timer for ${sessionId} on pane ${tmuxTarget} (${SESSION_END_OFFLINE_DELAY_MS}ms)`);
     this.cancelSessionEndTimer(tmuxTarget);
     const timer = setTimeout(() => {
       this.sessionEndTimers.delete(tmuxTarget);
@@ -260,6 +268,7 @@ export class SessionManager {
   private cancelSessionEndTimer(tmuxTarget: string): void {
     const timer = this.sessionEndTimers.get(tmuxTarget);
     if (timer) {
+      console.debug(`[SessionManager] Cancelled session_end timer for pane ${tmuxTarget}`);
       clearTimeout(timer);
       this.sessionEndTimers.delete(tmuxTarget);
     }
@@ -303,10 +312,12 @@ export class SessionManager {
 
   /** Process an event and update session status accordingly. */
   handleEvent(event: ClaudeEvent): void {
+    console.debug(`[SessionManager] handleEvent: type=${event.type} claude=${event.sessionId?.slice(0, 8)} tmux=${event.tmuxTarget} cwd=${event.cwd}`);
     let session = this.findByEvent(event);
 
     // Auto-link: if we found a session by cwd but it doesn't have claudeSessionId yet, link it
     if (session && !session.claudeSessionId && event.sessionId) {
+      console.debug(`[SessionManager] Auto-linking session ${session.id} to claudeSessionId=${event.sessionId.slice(0, 8)}`);
       session.claudeSessionId = event.sessionId;
     }
 
@@ -368,6 +379,7 @@ export class SessionManager {
 
     const prevStatus = session.status;
     session.lastActivity = Date.now();
+    console.debug(`[SessionManager] Processing event ${event.type} for session ${session.id} (prevStatus=${prevStatus})`);
 
     switch (event.type) {
       case 'user_prompt_submit':
@@ -499,8 +511,11 @@ export class SessionManager {
 
     const changed = session.status !== prevStatus || event.marker || event.assistantText || metaChanged;
     if (changed) {
+      console.debug(`[SessionManager] Session ${session.id} changed: ${prevStatus} → ${session.status} (marker=${!!event.marker}, text=${!!event.assistantText}, meta=${metaChanged})`);
       this.save();
       this.onSessionUpdate(session);
+    } else {
+      console.debug(`[SessionManager] Session ${session.id} no change after ${event.type} (status=${session.status})`);
     }
   }
 
@@ -539,6 +554,8 @@ export class SessionManager {
     const livePaneSet = new Set(livePanes);
     let changed = false;
 
+    console.debug(`[SessionManager] Health check: ${livePanes.length} live panes, ${this.sessions.size} tracked sessions. Panes: [${livePanes.join(', ')}]`);
+
     const toRemove: string[] = [];
 
     for (const session of this.sessions.values()) {
@@ -569,6 +586,7 @@ export class SessionManager {
 
       if (isAlive && !session.claudeExited) {
         if (session.status === 'offline') {
+          console.debug(`[SessionManager] Health: session ${session.id} (${session.tmuxTarget}) came alive, offline → idle`);
           session.status = 'idle';
           session.lastActivity = Date.now();
           this.onSessionUpdate(session);
@@ -578,6 +596,7 @@ export class SessionManager {
         // Pane is gone (or Claude exited but shell is still alive) — mark offline,
         // remove after grace period.
         if (session.status !== 'offline') {
+          console.debug(`[SessionManager] Health: session ${session.id} (${session.tmuxTarget}) is dead/exited, ${session.status} → offline (alive=${isAlive}, claudeExited=${session.claudeExited})`);
           session.status = 'offline';
           session.currentTool = undefined;
           session.currentToolInput = undefined;
