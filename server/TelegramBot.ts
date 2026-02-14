@@ -1618,10 +1618,10 @@ export class TelegramBot {
           // Budget: message limit minus timestamp (~30), title, blockquote tags (~40), margin
           const overhead = 30 + titleHtml.length + 40 + 100;
           const budget = TELEGRAM_MESSAGE_LIMIT - overhead;
-          const escaped = fmt.escapeHtml(cleaned);
-          const snippet = escaped.length > budget
-            ? escaped.slice(0, budget) + '\n[... truncated]'
-            : escaped;
+          const truncatedMd = cleaned.length > budget
+            ? cleaned.slice(0, budget) + '\n[... truncated]'
+            : cleaned;
+          const snippet = fmt.markdownToTelegramHtml(truncatedMd);
           const stopLine = `<code>${new Date(event.timestamp).toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
           })}</code> ${titleHtml}\n<blockquote expandable>${snippet}</blockquote>`;

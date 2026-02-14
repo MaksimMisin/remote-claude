@@ -31,6 +31,73 @@ export function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
+/**
+ * Convert common Markdown to Telegram HTML.
+ * Handles: fenced code blocks, inline code, tables, bold, italic, headings.
+ * Use instead of escapeHtml() for Claude's assistant text in blockquotes.
+ */
+export function markdownToTelegramHtml(text: string): string {
+  const blocks: string[] = [];
+  const ph = (idx: number) => `\x00B${idx}\x00`;
+
+  let result = text;
+
+  // 1. Extract fenced code blocks (```lang\n...\n```)
+  result = result.replace(/```\w*\n([\s\S]*?)```/g, (_, code) => {
+    const idx = blocks.length;
+    blocks.push(`<pre>${escapeHtml(code.trimEnd())}</pre>`);
+    return ph(idx);
+  });
+
+  // 2. Convert markdown tables to clean text lines (before inline code extraction)
+  result = result.replace(/((?:^|\n)\|[^\n]+\|(?:\n\|[^\n]+\|)*)/g, (match) => {
+    const lines = match.trim().split('\n');
+    const dataLines = lines
+      .filter(line => !/^\|[\s\-:|]+\|$/.test(line))  // drop separator rows
+      .map(line => {
+        // Strip markdown formatting inside cells
+        let clean = line.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/`([^`]+)`/g, '$1');
+        // Parse cells: split on |, trim, drop empty first/last from leading/trailing |
+        const cells = clean.split('|').map(c => c.trim()).filter((_, i, a) => i > 0 && i < a.length - 1);
+        return cells;
+      });
+    // First row = header (bold), rest = data rows joined with " — "
+    const formatted = dataLines.map((cells, i) => {
+      const joined = cells.join(' — ');
+      return i === 0 ? `<b>${escapeHtml(joined)}</b>` : escapeHtml(joined);
+    });
+    const idx = blocks.length;
+    blocks.push(formatted.join('\n'));
+    return '\n' + ph(idx) + '\n';
+  });
+
+  // 3. Extract inline code (`...`)
+  result = result.replace(/`([^`\n]+)`/g, (_, code) => {
+    const idx = blocks.length;
+    blocks.push(`<code>${escapeHtml(code)}</code>`);
+    return ph(idx);
+  });
+
+  // 4. Escape HTML in remaining text
+  result = escapeHtml(result);
+
+  // 5. Headings: # text → bold
+  result = result.replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>');
+
+  // 6. Bold: **text**
+  result = result.replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+
+  // 7. Italic: *text* (not within words, not part of **)
+  result = result.replace(/(?<![*\w])\*([^*\n]+?)\*(?![*\w])/g, '<i>$1</i>');
+
+  // 8. Restore extracted blocks
+  blocks.forEach((html, idx) => {
+    result = result.replace(ph(idx), html);
+  });
+
+  return result;
+}
+
 /** One-line tool summary for display in notifications. */
 export function formatToolSummary(
   tool: string,
@@ -123,7 +190,7 @@ export function formatSessionFinished(
   const content = snippet || markerMsg;
   let msg = `\u2705 <b>${escapeHtml(sessionName)}</b> finished`;
   if (content) {
-    msg += `\n<blockquote expandable>${escapeHtml(content)}</blockquote>`;
+    msg += `\n<blockquote expandable>${markdownToTelegramHtml(content)}</blockquote>`;
   }
   return msg;
 }
@@ -143,14 +210,14 @@ export function formatSessionWaiting(
   // For ExitPlanMode, include the plan content so reviewers can make informed decisions
   if (tool === 'ExitPlanMode' && toolInput?.planContent) {
     const plan = String(toolInput.planContent);
-    const escaped = escapeHtml(plan);
     // Blockquote overhead: "<blockquote expandable>...</blockquote>\n\n" ≈ 40 chars
+    // Budget applied to raw text; HTML conversion may add ~10-20% from tags
     const budget = TELEGRAM_MESSAGE_LIMIT - msg.length - 60;
     if (budget > 200) {
-      const truncated = escaped.length > budget
-        ? escaped.slice(0, budget) + '\n[... truncated]'
-        : escaped;
-      msg += `\n\n<blockquote expandable>${truncated}</blockquote>`;
+      const truncated = plan.length > budget
+        ? plan.slice(0, budget) + '\n[... truncated]'
+        : plan;
+      msg += `\n\n<blockquote expandable>${markdownToTelegramHtml(truncated)}</blockquote>`;
     }
   }
 
@@ -169,7 +236,7 @@ export function formatSessionQuestion(
 ): string {
   return (
     `\u2753 <b>${escapeHtml(sessionName)}</b> has a question\n` +
-    `<blockquote expandable>${escapeHtml(questionText)}</blockquote>`
+    `<blockquote expandable>${markdownToTelegramHtml(questionText)}</blockquote>`
   );
 }
 
