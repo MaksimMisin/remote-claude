@@ -131,7 +131,7 @@ case "$EVENT_TYPE" in
         flatten | join("\n")
       ' 2>/dev/null)" || true
       if [ -n "$RESPONSE" ]; then
-        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 4000)"
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 16000)"
       fi
     fi
     ;;
@@ -154,22 +154,18 @@ case "$EVENT_TYPE" in
     TRANSCRIPT_PATH="$(echo "$INPUT" | "$JQ" -r '.transcript_path // ""')"
 
     if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
-      # Search last 10 lines for the most recent assistant message
-      # (transcript ends with system/progress entries after the assistant message)
-      RESPONSE=""
-      while IFS= read -r line; do
-        MAYBE="$(echo "$line" | "$JQ" -r '
-          select(.type == "assistant") |
-          .message.content // [] | map(select(.type == "text") | .text) | join("\n")
-        ' 2>/dev/null)" || true
-        if [ -n "$MAYBE" ]; then
-          RESPONSE="$MAYBE"
-        fi
-      done < <(tail -10 "$TRANSCRIPT_PATH" 2>/dev/null)
+      # Collect ALL assistant text since last user message (same approach as pre_tool_use)
+      RESPONSE="$(tail -30 "$TRANSCRIPT_PATH" | "$JQ" -rs '
+        (to_entries | map(select(.value.type == "user")) | last | .key) as $last_user |
+        to_entries | map(select(.key > ($last_user // -1))) |
+        map(.value) | map(select(.type == "assistant")) |
+        map(.message.content | map(select(.type == "text")) | map(.text)) |
+        flatten | join("\n")
+      ' 2>/dev/null)" || true
 
       if [ -n "$RESPONSE" ]; then
-        # Take last 4000 chars for assistantText
-        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 4000)"
+        # Take last 16000 chars for assistantText (enough for tables/long output)
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 16000)"
 
         # Look for <!--rc:CATEGORY:MESSAGE--> pattern (also escaped variant)
         # Use perl for reliable regex extraction
@@ -230,7 +226,7 @@ case "$EVENT_TYPE" in
         flatten | join("\n")
       ' 2>/dev/null)" || true
       if [ -n "$RESPONSE" ]; then
-        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 4000)"
+        ASSISTANT_TEXT="$(echo "$RESPONSE" | tail -c 16000)"
       fi
     fi
     ;;

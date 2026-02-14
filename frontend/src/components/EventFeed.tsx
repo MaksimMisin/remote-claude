@@ -10,7 +10,7 @@ import {
   stripMarkers,
 } from '../utils/events';
 
-const COLLAPSED_LIMIT = 500;
+const COLLAPSED_LIMIT = 2000;
 
 interface EventFeedProps {
   events: ClaudeEvent[];
