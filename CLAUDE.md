@@ -31,6 +31,15 @@ Monitor and control Claude Code sessions remotely via a mobile web dashboard.
 - Debug logs use `console.debug()` -- `[DBG]` prefix in log file, covers full event→session→topic flow
 - Key debug prefixes: `[SessionManager]`, `[Topics]`, `[Telegram]`, `[Server]`
 
+## Telegram Verification
+Use Chrome browser tools to visually verify Telegram output after changes to formatting, topics, or notifications.
+- Open `https://web.telegram.org/k/#TELEGRAM_CHAT_ID` (the negative group ID from env)
+- Topic list in the left sidebar = session list. Click a topic to see its messages.
+- Default/General topic: click "General" in the sidebar (used for system messages)
+- Individual session topics: named after the session display name with status emoji prefix
+- Verify: message formatting, status emojis in topic names, inline buttons (Approve/Reject), pinned status messages
+- Topic URL format: `https://web.telegram.org/k/#CHAT_ID/THREAD_ID` to jump to a specific topic
+
 ## Parallel Agent Notes
 - Re-read files before editing (another agent may have changed them)
 - After editing `frontend/` files, rebuild: `cd frontend && npm run build`
