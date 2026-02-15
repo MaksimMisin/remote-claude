@@ -181,6 +181,139 @@ export function formatEventLine(
   }
 }
 
+/** Input shape for activity digest events. */
+export interface DigestEvent {
+  tool: string;
+  toolInput: Record<string, unknown>;
+  assistantText?: string;
+}
+
+/**
+ * Convert a list of buffered tool events into a single condensed digest line.
+ * Output format: '⚙️ verb1 · verb2 · verb3'
+ * Deduplicates repeated tools (e.g. 5 Reads → 'read 5 files').
+ * Returns empty string when input is empty or contains no meaningful events.
+ */
+export function formatActivityDigest(events: DigestEvent[]): string {
+  if (!events || events.length === 0) return '';
+
+  // Group events by tool type
+  const groups = new Map<string, DigestEvent[]>();
+  for (const ev of events) {
+    if (!ev.tool) continue;
+    const existing = groups.get(ev.tool) || [];
+    existing.push(ev);
+    groups.set(ev.tool, existing);
+  }
+
+  if (groups.size === 0) return '';
+
+  const parts: string[] = [];
+
+  for (const [tool, toolEvents] of groups) {
+    const count = toolEvents.length;
+
+    switch (tool) {
+      case 'Read': {
+        parts.push(count === 1
+          ? 'read 1 file'
+          : `read ${count} files`);
+        break;
+      }
+      case 'Grep': {
+        parts.push(count === 1
+          ? '1 search'
+          : `${count} searches`);
+        break;
+      }
+      case 'Glob': {
+        parts.push(count === 1
+          ? '1 glob'
+          : `${count} globs`);
+        break;
+      }
+      case 'Edit': {
+        // Always include basenames
+        const names = [...new Set(toolEvents.map(ev => {
+          const fp = String(ev.toolInput?.file_path ?? '');
+          return fp.split('/').pop() || 'file';
+        }))];
+        if (names.length === 1) {
+          parts.push(`edited ${escapeHtml(names[0])}`);
+        } else {
+          parts.push(`edited ${names.map(n => escapeHtml(n)).join(', ')}`);
+        }
+        break;
+      }
+      case 'Write': {
+        // Always include basenames
+        const names = [...new Set(toolEvents.map(ev => {
+          const fp = String(ev.toolInput?.file_path ?? '');
+          return fp.split('/').pop() || 'file';
+        }))];
+        if (names.length === 1) {
+          parts.push(`wrote ${escapeHtml(names[0])}`);
+        } else {
+          parts.push(`wrote ${names.map(n => escapeHtml(n)).join(', ')}`);
+        }
+        break;
+      }
+      case 'Bash': {
+        // Each bash command is unique — list them individually
+        for (const ev of toolEvents) {
+          const desc = String(ev.toolInput?.description ?? '');
+          if (desc) {
+            parts.push(escapeHtml(desc.length > 40 ? desc.slice(0, 37) + '...' : desc));
+          } else {
+            const cmd = String(ev.toolInput?.command ?? '');
+            const truncated = cmd.length > 40 ? cmd.slice(0, 37) + '...' : cmd;
+            parts.push(escapeHtml(truncated));
+          }
+        }
+        break;
+      }
+      case 'Task': {
+        for (const ev of toolEvents) {
+          const desc = String(ev.toolInput?.description ?? ev.toolInput?.prompt ?? '').slice(0, 40);
+          parts.push(`task: ${escapeHtml(desc)}`);
+        }
+        break;
+      }
+      default: {
+        parts.push(count === 1
+          ? tool.toLowerCase()
+          : `${count}× ${tool.toLowerCase()}`);
+        break;
+      }
+    }
+  }
+
+  if (parts.length === 0) return '';
+
+  let result = `⚙️ ${parts.join(' · ')}`;
+
+  // Find longest non-trivial assistantText
+  const trivialPrefixes = ['Let me', "I'll", 'Now'];
+  const candidates = events
+    .filter(ev => ev.assistantText)
+    .map(ev => ev.assistantText!.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim())
+    .filter(text => {
+      if (!text) return false;
+      // Skip single sentences starting with trivial prefixes
+      const isSingleSentence = !text.includes('\n') && (text.match(/\./g) || []).length <= 1;
+      if (isSingleSentence && trivialPrefixes.some(p => text.startsWith(p))) return false;
+      return true;
+    });
+
+  if (candidates.length > 0) {
+    const longest = candidates.reduce((a, b) => a.length >= b.length ? a : b);
+    const truncated = longest.length > 300 ? longest.slice(0, 297) + '...' : longest;
+    result += `\n  <i>${escapeHtml(truncated)}</i>`;
+  }
+
+  return result;
+}
+
 /** Format a "session finished" notification. */
 export function formatSessionFinished(
   sessionName: string,
