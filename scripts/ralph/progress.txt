@@ -92,3 +92,15 @@ Started: Sun Feb 15 03:50:25 EET 2026
   - Three-tier approach avoids blockquotes for short/medium content, making finished notifications cleaner on mobile
   - `markdownToTelegramHtml()` is safe for all tiers — handles code blocks, bold, etc. in inline contexts too
 ---
+
+## 2026-02-15 - US-007
+- Verified all push notification behavior already meets acceptance criteria (implemented in US-004)
+- Activity digests: `flushEventBuffer()` → `sendMessage(digest, { topicId, silent: true })` → `disable_notification: true`
+- Finished/question/plan notifications: `sendMessage(...)` without `silent` → push notification enabled
+- `sendMessage()` wrapper already maps `silent: true` → `disable_notification: true` in Telegram API call
+- No code changes needed — all criteria satisfied by existing implementation from US-004
+- Files changed: none (only PRD/progress updated)
+- **Learnings for future iterations:**
+  - US-004 already implemented the `silent: true` pattern for digests and the `sendMessage` wrapper — US-007 was implicitly completed
+  - The `silent` option in `sendMessage()` options maps directly to Telegram's `disable_notification` parameter
+---

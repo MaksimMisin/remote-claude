@@ -123,7 +123,7 @@
         "Typecheck passes"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": "The grammY bot.api.sendMessage already supports disable_notification as an option. Check how the existing sendMessage wrapper in TelegramBot.ts passes options through — may need to add a parameter for silent mode. Event buffer messages currently use silent: true which maps to disable_notification."
     }
   ]
