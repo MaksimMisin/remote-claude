@@ -1,0 +1,130 @@
+{
+  "project": "RemoteClaude",
+  "branchName": "ralph/telegram-clean-ui",
+  "description": "Telegram Clean UI - Fix missing content (diffs, truncated responses, lost plans) and replace noisy per-tool messages with condensed activity digests",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Build formatActivityDigest() helper in telegram-format.ts",
+      "description": "As a developer, I need a formatting function that converts a list of buffered tool events into a single condensed digest line, so the digest logic is testable and reusable.",
+      "acceptanceCriteria": [
+        "New exported function formatActivityDigest() in server/telegram-format.ts",
+        "Input: array of objects with { tool: string, toolInput: any, assistantText?: string } shape",
+        "Output format: '⚙️ verb1 · verb2 · verb3' as HTML-escaped string",
+        "Deduplicates repeated tools: 5 Reads become 'read 5 files', 3 Greps become '3 searches'",
+        "Edit/Write tools always include basename: 'edited foo.ts' not 'edited file'",
+        "Bash tool uses toolInput.description when available, otherwise truncated command (max 40 chars)",
+        "Mixed example output: '⚙️ edited foo.ts · ran tests · read 3 files'",
+        "Returns empty string when input array is empty or contains no meaningful tool events",
+        "When assistantText is present in events, picks the longest non-trivial one (skip single sentences starting with 'Let me', 'I\\'ll', 'Now') and appends as second line: '\\n  <i>{text max 300 chars}</i>'",
+        "Reasoning text cleaned of <!--rc:...--> markers before display",
+        "Typecheck passes"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "Look at existing formatEventLine() in telegram-format.ts for verb/icon patterns. Reuse its logic internally but produce a collapsed single-line output instead of per-tool lines. Use escapeHtml() (already in file) for all user-facing text."
+    },
+    {
+      "id": "US-002",
+      "title": "Fix response truncation in finished notifications",
+      "description": "As a user, I want to read Claude's full response in the finished notification instead of a 3.5KB truncation of a 16KB response.",
+      "acceptanceCriteria": [
+        "In server/TelegramBot.ts onStatusChange handler, remove the .slice(0, 3500) truncation on session.lastAssistantText",
+        "Instead, allow up to 8000 chars of response text",
+        "If response exceeds 8000 chars, truncate at 8000 with '[... truncated, N chars total]' suffix",
+        "Use splitMessage() (already exists in telegram-format.ts) to split the formatted HTML across multiple Telegram messages if it exceeds 4000 chars",
+        "Send each split part as a separate sendMessage call to the same topic",
+        "Expandable blockquote still used for content over 300 chars",
+        "Typecheck passes"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": "The truncation is in TelegramBot.ts in the onStatusChange method where it does session.lastAssistantText?.slice(0, 3500). splitMessage() is already exported from telegram-format.ts and handles 4000 char Telegram limit. The sendMessage method on TelegramBot already exists."
+    },
+    {
+      "id": "US-003",
+      "title": "Persist plan content through to finished notification",
+      "description": "As a user, I want to see the plan Claude executed in the finished message, so I have a record of what was planned.",
+      "acceptanceCriteria": [
+        "Add optional planContent field to session object in server/SessionManager.ts (on the Session interface or inline type)",
+        "When a pre_tool_use event for ExitPlanMode is processed, store toolInput.planContent on the session",
+        "Clear planContent when session transitions to 'working' status (new task started)",
+        "In TelegramBot.ts onStatusChange for idle: if session.planContent exists, include it in the finished notification",
+        "Plan shown with '📋 Plan:' header before the response summary, formatted with markdownToTelegramHtml()",
+        "Plan content budget: max 3000 chars (truncate with '[... plan truncated]' if longer)",
+        "Also add planContent to shared/types.ts Session interface if it exists there",
+        "Typecheck passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": "ExitPlanMode events already have planContent in toolInput (hook.sh reads the plan file and adds it). The session object is defined either in shared/types.ts or server/SessionManager.ts. Check both."
+    },
+    {
+      "id": "US-004",
+      "title": "Replace per-tool event stream with activity digests",
+      "description": "As a user, I want tool calls collapsed into periodic digest messages instead of one message per tool call.",
+      "acceptanceCriteria": [
+        "In TelegramBot.ts onEvent method, tool events (pre_tool_use) are buffered with their tool name, toolInput, and assistantText",
+        "flushEventBuffer() calls formatActivityDigest() on the buffered tool events to produce one digest line instead of joining individual formatEventLine() outputs",
+        "Stop events with non-silent markers still generate their own standalone messages (not collapsed into digest)",
+        "ExitPlanMode pre_tool_use events bypass the digest buffer and generate an immediate standalone plan message",
+        "user_prompt_submit events still tracked for initialPrompt but NOT included in digest output",
+        "Digest messages sent with disable_notification: true (no push notification sound)",
+        "If formatActivityDigest returns empty string, no message is sent for that flush cycle",
+        "Typecheck passes"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": "The existing eventBuffers Map in TelegramBot.ts already groups events per session with a 10s flush interval. Adapt the buffer format and flush logic rather than rebuilding. The buffer currently stores formatted strings — change it to store raw event data so formatActivityDigest can process them. Look at how formatEventLine() is currently called in onEvent and replace that path."
+    },
+    {
+      "id": "US-005",
+      "title": "Show edit diffs in permission prompts",
+      "description": "As a user reviewing permission prompts for Edit tools, I want to see what code is being changed, not just the filename.",
+      "acceptanceCriteria": [
+        "In formatSessionWaiting() in telegram-format.ts, add special handling for Edit tool (similar to existing ExitPlanMode handling)",
+        "When tool is Edit and toolInput has old_string and new_string, show a diff preview",
+        "Diff format: show old_string (prefixed with - lines) and new_string (prefixed with + lines) inside <pre> tags",
+        "Limit diff preview to first 15 lines total (combined old + new), truncate with '[... N more lines]'",
+        "Total diff budget: max 1500 chars to fit within Telegram message alongside other content",
+        "For Write tool, show filename + first 5 lines of content in <pre> block",
+        "Typecheck passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": "formatSessionWaiting() already has special handling for ExitPlanMode that shows planContent in an expandable blockquote. Follow the same pattern for Edit. toolInput has file_path, old_string, new_string fields."
+    },
+    {
+      "id": "US-006",
+      "title": "Clean up finished notification format",
+      "description": "As a user, I want the finished notification to be concise — short summaries inline, long ones in blockquotes.",
+      "acceptanceCriteria": [
+        "Update formatSessionFinished() in telegram-format.ts",
+        "Short summaries (<150 chars): inline format '✅ <b>name</b> finished — summary here' (single line, no blockquote)",
+        "Medium summaries (150-500 chars): header line + summary as indented text below (no expandable blockquote)",
+        "Long summaries (500+ chars): header + expandable blockquote (current behavior preserved)",
+        "RC marker message used as summary when available (markerMsg parameter), falling back to snippet",
+        "Typecheck passes"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": "formatSessionFinished() is in server/telegram-format.ts. Currently always uses expandable blockquote for any content. The markerMsg comes from the <!--rc:category:message--> markers that Claude adds to responses."
+    },
+    {
+      "id": "US-007",
+      "title": "Suppress push notifications for activity digests",
+      "description": "As a user, I only want my phone to buzz for questions and finished status, not for every activity digest.",
+      "acceptanceCriteria": [
+        "Activity digest messages from flushEventBuffer sent with disable_notification: true",
+        "Finished notifications (idle status) sent WITH push notification (current behavior)",
+        "Question/approval notifications (waiting status) sent WITH push notification (current behavior)",
+        "Plan messages (ExitPlanMode standalone) sent WITH push notification",
+        "Verify that the sendMessage method in TelegramBot supports passing disable_notification option through to the Telegram API",
+        "Typecheck passes"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": "The grammY bot.api.sendMessage already supports disable_notification as an option. Check how the existing sendMessage wrapper in TelegramBot.ts passes options through — may need to add a parameter for silent mode. Event buffer messages currently use silent: true which maps to disable_notification."
+    }
+  ]
+}

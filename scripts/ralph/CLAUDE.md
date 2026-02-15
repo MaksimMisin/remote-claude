@@ -79,13 +79,11 @@ Only update CLAUDE.md if you have **genuinely reusable knowledge** that would he
 
 ## Browser Testing
 
-For any story that changes UI, verify it works in the browser if you have browser testing tools configured (e.g., via MCP):
+For any story that changes UI, verify it works in the browser:
 
 1. Navigate to the relevant page
 2. Verify the UI changes work as expected
 3. Take a screenshot if helpful for the progress log
-
-If no browser tools are available, note in your progress report that manual browser verification is needed.
 
 ## Stop Condition
 
