@@ -3,10 +3,11 @@
 - `markdownToTelegramHtml()` for converting Claude's markdown responses to Telegram HTML
 - `splitMessage()` in `telegram-format.ts` handles 4000 char Telegram message limit
 - Pre-existing typecheck errors in `server/TopicManager.test.ts` — ignore when running `npx tsc --noEmit`
-- Event buffer in TelegramBot.ts: `eventBuffer` Map stores per-session arrays, flushed every 10s
-- `formatEventLine()` returns per-tool emoji + description lines (used in current event stream)
+- Event buffer in TelegramBot.ts: `eventBuffer` Map stores per-session `DigestEvent[]` arrays, flushed every 10s via `formatActivityDigest()`
+- `formatEventLine()` returns per-tool emoji + description lines (still used for standalone tool display, not digest)
+- `onEvent()` routes: pre_tool_use → digest buffer, ExitPlanMode → standalone plan, stop → standalone, user_prompt_submit → initialPrompt tracking only
 - `sendMessage()` in TelegramBot.ts already calls `splitMessage()` — no need to manually split in callers
-- `formatSessionFinished()` uses expandable blockquote for >300 char content, plain text for shorter
+- `formatSessionFinished()` three tiers: <150 chars = inline "finished — summary", 150-500 = header + text, 500+ = expandable blockquote. Prefers markerMsg over snippet.
 - `session.planContent` stores plan from ExitPlanMode — captured on pre_tool_use, cleared on user_prompt_submit
 - Variables for delayed setTimeout idle notifications must be captured before the delay (closure pattern: `capturedPlanContent`, `capturedMarkerCategory`)
 
@@ -49,4 +50,45 @@ Started: Sun Feb 15 03:50:25 EET 2026
   - Variables used in the delayed `setTimeout` idle notification must be captured before the delay (closures) — `capturedPlanContent` pattern
   - Plan is sent as a separate `sendMessage()` call before the finished message to avoid exceeding Telegram message limits
   - `SessionManager` already has `readLatestPlanContent()` for the notification/waiting path — `planContent` persistence is a simpler approach for the finished path
+---
+
+## 2026-02-15 - US-004
+- Changed `eventBuffer` Map type from `string[]` to `DigestEvent[]` (raw event data)
+- Rewrote `onEvent()` to route events by type:
+  - `pre_tool_use` → buffer as `DigestEvent` for digest
+  - `ExitPlanMode` → flush buffer, send standalone plan message with push notification
+  - `stop` (non-silent) → flush buffer, send standalone message
+  - `user_prompt_submit` → track initialPrompt only, NOT included in digest
+- Rewrote `flushEventBuffer()` to call `formatActivityDigest()` instead of joining formatted strings
+- All digest messages sent with `silent: true` (maps to `disable_notification: true`)
+- Files changed: `server/TelegramBot.ts`
+- **Learnings for future iterations:**
+  - The buffer type change from `string[]` to `DigestEvent[]` was clean — `onSessionReplaced` buffer transfer still works because it uses generic array operations
+  - ExitPlanMode sends plan with push notification (no `silent: true`) since plans are important; digests are silent
+  - `formatEventLine()` is no longer called in the digest path but still exists for other uses
+  - The event routing in `onEvent` uses early returns for each event type — cleaner than the previous if/else chain
+---
+
+## 2026-02-15 - US-005
+- Added Edit tool diff preview in `formatSessionWaiting()` — shows old_string lines prefixed with `-` and new_string lines prefixed with `+` inside `<pre>` tags
+- Added Write tool file preview — shows filename + first 5 lines of content inside `<pre>` tags
+- Both previews capped at 15 lines total (Edit) or 5 lines (Write), and 1500 chars max
+- Files changed: `server/telegram-format.ts`
+- **Learnings for future iterations:**
+  - `formatSessionWaiting()` already had the ExitPlanMode pattern — Edit/Write follow the same approach: check tool name + toolInput fields, build preview, append to msg
+  - Edit toolInput has `file_path`, `old_string`, `new_string` fields; Write has `file_path`, `content`
+  - The 1500 char budget leaves room for the rest of the message (tool summary, session name) within the 4096 Telegram limit
+---
+
+## 2026-02-15 - US-006
+- Updated `formatSessionFinished()` in `server/telegram-format.ts` to support three content tiers
+- Short (<150 chars): inline format `✅ name finished — summary here` (single line, no blockquote)
+- Medium (150-500 chars): header line + summary text below (no expandable blockquote)
+- Long (500+ chars): header + expandable blockquote (preserved existing behavior)
+- Fixed content priority: `markerMsg || snippet` instead of `snippet || markerMsg` — RC marker messages now preferred as summary
+- Files changed: `server/telegram-format.ts`
+- **Learnings for future iterations:**
+  - The old code had `snippet || markerMsg` which meant the (often long) response snippet always won over the concise marker message — fixed to `markerMsg || snippet`
+  - Three-tier approach avoids blockquotes for short/medium content, making finished notifications cleaner on mobile
+  - `markdownToTelegramHtml()` is safe for all tiers — handles code blocks, bold, etc. in inline contexts too
 ---

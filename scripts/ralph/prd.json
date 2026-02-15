@@ -74,7 +74,7 @@
         "Typecheck passes"
       ],
       "priority": 4,
-      "passes": false,
+      "passes": true,
       "notes": "The existing eventBuffers Map in TelegramBot.ts already groups events per session with a 10s flush interval. Adapt the buffer format and flush logic rather than rebuilding. The buffer currently stores formatted strings — change it to store raw event data so formatActivityDigest can process them. Look at how formatEventLine() is currently called in onEvent and replace that path."
     },
     {
@@ -91,7 +91,7 @@
         "Typecheck passes"
       ],
       "priority": 5,
-      "passes": false,
+      "passes": true,
       "notes": "formatSessionWaiting() already has special handling for ExitPlanMode that shows planContent in an expandable blockquote. Follow the same pattern for Edit. toolInput has file_path, old_string, new_string fields."
     },
     {
@@ -107,7 +107,7 @@
         "Typecheck passes"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": "formatSessionFinished() is in server/telegram-format.ts. Currently always uses expandable blockquote for any content. The markerMsg comes from the <!--rc:category:message--> markers that Claude adds to responses."
     },
     {

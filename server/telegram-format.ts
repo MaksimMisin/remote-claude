@@ -314,23 +314,32 @@ export function formatActivityDigest(events: DigestEvent[]): string {
   return result;
 }
 
-/** Format a "session finished" notification. */
+/** Format a "session finished" notification.
+ * Short (<150 chars): inline single line.
+ * Medium (150-500 chars): header + text below.
+ * Long (500+ chars): header + expandable blockquote.
+ * Prefers markerMsg (from <!--rc:...--> markers) over snippet. */
 export function formatSessionFinished(
   sessionName: string,
   snippet?: string,
   markerMsg?: string,
 ): string {
-  const content = snippet || markerMsg;
-  let msg = `\u2705 <b>${escapeHtml(sessionName)}</b> finished`;
-  if (content) {
-    const htmlContent = markdownToTelegramHtml(content);
-    if (content.length > 300) {
-      msg += `\n<blockquote expandable>${htmlContent}</blockquote>`;
-    } else {
-      msg += `\n${htmlContent}`;
-    }
+  const content = markerMsg || snippet;
+  const header = `\u2705 <b>${escapeHtml(sessionName)}</b> finished`;
+  if (!content) return header;
+
+  const htmlContent = markdownToTelegramHtml(content);
+
+  if (content.length < 150) {
+    // Short: inline on same line
+    return `${header} — ${htmlContent}`;
+  } else if (content.length < 500) {
+    // Medium: header + text below (no expandable blockquote)
+    return `${header}\n${htmlContent}`;
+  } else {
+    // Long: header + expandable blockquote
+    return `${header}\n<blockquote expandable>${htmlContent}</blockquote>`;
   }
-  return msg;
 }
 
 /** Format a "needs approval" notification. */
