@@ -323,7 +323,12 @@ export function formatSessionFinished(
   const content = snippet || markerMsg;
   let msg = `\u2705 <b>${escapeHtml(sessionName)}</b> finished`;
   if (content) {
-    msg += `\n<blockquote expandable>${markdownToTelegramHtml(content)}</blockquote>`;
+    const htmlContent = markdownToTelegramHtml(content);
+    if (content.length > 300) {
+      msg += `\n<blockquote expandable>${htmlContent}</blockquote>`;
+    } else {
+      msg += `\n${htmlContent}`;
+    }
   }
   return msg;
 }

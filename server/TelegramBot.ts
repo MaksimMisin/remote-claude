@@ -1350,10 +1350,15 @@ export class TelegramBot {
     console.debug(`[Telegram] onStatusChange: session ${session.id} "${fmt.getDisplayName(session)}" ${prevStatus} → ${session.status} (forumMode=${this.forumMode}, hasTM=${!!this.topicManager})`);
     const name = fmt.getDisplayName(session);
     const markerMsg = session.lastMarker?.message;
-    const snippet = session.lastAssistantText
+    const rawText = session.lastAssistantText
       ?.replace(/<!--rc:\w+:?[^>]*-->/g, '')
-      .trim()
-      .slice(0, 3500);
+      .trim();
+    const MAX_RESPONSE_CHARS = 8000;
+    const snippet = rawText
+      ? (rawText.length > MAX_RESPONSE_CHARS
+          ? rawText.slice(0, MAX_RESPONSE_CHARS) + `\n[... truncated, ${rawText.length} chars total]`
+          : rawText)
+      : undefined;
 
     // Cancel any pending idle notification if session is no longer idle
     // (e.g., went back to working before the 3s delay expired).
