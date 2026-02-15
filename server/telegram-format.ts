@@ -359,6 +359,45 @@ export function formatSessionWaiting(
     }
   }
 
+  // For Edit tool, show a diff preview of old_string → new_string
+  if (tool === 'Edit' && toolInput?.old_string && toolInput?.new_string) {
+    const oldStr = String(toolInput.old_string);
+    const newStr = String(toolInput.new_string);
+    const oldLines = oldStr.split('\n').map(l => `- ${l}`);
+    const newLines = newStr.split('\n').map(l => `+ ${l}`);
+    const allLines = [...oldLines, ...newLines];
+    const maxLines = 15;
+    let diffText: string;
+    if (allLines.length > maxLines) {
+      diffText = allLines.slice(0, maxLines).join('\n') + `\n[... ${allLines.length - maxLines} more lines]`;
+    } else {
+      diffText = allLines.join('\n');
+    }
+    // Enforce 1500 char budget for the diff
+    if (diffText.length > 1500) {
+      diffText = diffText.slice(0, 1497) + '...';
+    }
+    msg += `\n\n<pre>${escapeHtml(diffText)}</pre>`;
+  }
+
+  // For Write tool, show filename + first 5 lines of content
+  if (tool === 'Write' && toolInput?.file_path && toolInput?.content) {
+    const fp = String(toolInput.file_path);
+    const name = fp.split('/').pop() || fp;
+    const content = String(toolInput.content);
+    const lines = content.split('\n');
+    let preview: string;
+    if (lines.length > 5) {
+      preview = lines.slice(0, 5).join('\n') + `\n[... ${lines.length - 5} more lines]`;
+    } else {
+      preview = content;
+    }
+    if (preview.length > 1500) {
+      preview = preview.slice(0, 1497) + '...';
+    }
+    msg += `\n\n📝 <b>${escapeHtml(name)}</b>\n<pre>${escapeHtml(preview)}</pre>`;
+  }
+
   return msg;
 }
 
