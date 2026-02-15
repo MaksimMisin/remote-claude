@@ -56,8 +56,8 @@ export class TelegramBot {
   private activeSessionId: string | null = null;
   private forumMode: boolean = false;
   private topicManager: TopicManager | null = null;
-  /** Per-session event buffer for batched sending. */
-  private eventBuffer = new Map<string, string[]>();
+  /** Per-session event buffer for batched sending (raw events for digest). */
+  private eventBuffer = new Map<string, fmt.DigestEvent[]>();
   /** Per-session flush timers for event batches. */
   private eventFlushTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private getSessions: TelegramBotConfig['getSessions'];
@@ -1598,95 +1598,101 @@ export class TelegramBot {
   // ---- Event streaming to topics ----
 
   /**
-   * Called by the server for each raw event. Buffers events and flushes
-   * them as batched messages every 3 seconds per session topic.
+   * Called by the server for each raw event. Buffers tool events and flushes
+   * them as condensed activity digests every 10 seconds per session topic.
+   * Stop events with non-silent markers and ExitPlanMode are sent standalone.
    */
   async onEvent(event: ClaudeEvent, session: ManagedSession): Promise<void> {
     // Only stream in forum mode (topics give per-session context)
     if (!this.forumMode || !this.topicManager) return;
     console.debug(`[Telegram] onEvent: ${event.type} for session ${session.id} (topic=${this.topicManager.getTopicId(session.id) ?? 'none'})`);
 
-    let line: string | undefined;
-
-    if (event.type === 'pre_tool_use' && event.tool) {
-      // Tool activity — matches web dashboard event feed
-      line = fmt.formatEventLine(event.tool, event.toolInput);
-      // Include Claude's reasoning as context (like web dashboard's grey text)
-      if (event.assistantText) {
-        const cleaned = event.assistantText.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim();
-        if (cleaned) {
-          const snippet = cleaned.length > 300 ? cleaned.slice(0, 300) + '...' : cleaned;
-          line += `\n   <i>${fmt.escapeHtml(snippet)}</i>`;
-        }
-      }
-    } else if (event.type === 'stop' && event.assistantText) {
-      // Claude's response — skip silent markers
-      if (event.marker?.category === 'silent') return;
-      const cleaned = event.assistantText.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim();
-      if (cleaned) {
-        const desc = event.marker?.message || 'Response';
-        // Show marker as title, full text as expandable content
-        if (cleaned.length > 100) {
-          // Long content (plans, detailed responses): compute budget from Telegram limit,
-          // flush pending buffer, and send as standalone message to avoid blockquote splitting
-          const titleHtml = `✅ <b>${fmt.escapeHtml(desc)}</b>`;
-          // Budget: message limit minus timestamp (~30), title, blockquote tags (~40), margin
-          const overhead = 30 + titleHtml.length + 40 + 100;
-          const budget = TELEGRAM_MESSAGE_LIMIT - overhead;
-          const truncatedMd = cleaned.length > budget
-            ? cleaned.slice(0, budget) + '\n[... truncated]'
-            : cleaned;
-          const snippet = fmt.markdownToTelegramHtml(truncatedMd);
-          const stopLine = `<code>${new Date(event.timestamp).toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-          })}</code> ${titleHtml}\n<blockquote expandable>${snippet}</blockquote>`;
-
-          // Flush any pending tool events first, then send stop as its own message
-          await this.flushEventBuffer(session.id);
-          const topicId = this.topicManager?.getTopicId(session.id);
-          if (topicId) {
-            await this.sendMessage(stopLine, { topicId, silent: true });
-          }
-          return; // Already sent — skip buffer
-        } else {
-          line = `✅ ${fmt.escapeHtml(cleaned)}`;
-        }
-      }
-    } else if (event.type === 'user_prompt_submit' && event.assistantText) {
-      // Store initial prompt for /status display (only captures the first one per topic)
+    // user_prompt_submit: track for /status but do NOT include in digest
+    if (event.type === 'user_prompt_submit' && event.assistantText) {
       this.topicManager.setInitialPrompt(session.id, event.assistantText.trim());
-      // User prompt — show what was sent
-      const text = event.assistantText.trim();
-      if (text) {
-        const snippet = text.length > 200 ? text.slice(0, 200) + '...' : text;
-        line = `💬 <i>${fmt.escapeHtml(snippet)}</i>`;
-      }
+      return;
     }
 
-    if (!line) return;
+    // ExitPlanMode pre_tool_use: bypass digest buffer, send immediate standalone plan message
+    if (event.type === 'pre_tool_use' && event.tool === 'ExitPlanMode') {
+      await this.flushEventBuffer(session.id);
+      const topicId = this.topicManager.getTopicId(session.id);
+      if (topicId && event.toolInput?.planContent) {
+        const plan = String(event.toolInput.planContent);
+        const budget = 3000;
+        const truncated = plan.length > budget
+          ? plan.slice(0, budget) + '\n[... plan truncated]'
+          : plan;
+        const planHtml = `📋 <b>Plan:</b>\n<blockquote expandable>${fmt.markdownToTelegramHtml(truncated)}</blockquote>`;
+        await this.sendMessage(planHtml, { topicId });
+      }
+      return;
+    }
 
-    // Add timestamp prefix
-    const time = new Date(event.timestamp).toLocaleTimeString('en-US', {
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-    });
-    line = `<code>${time}</code> ${line}`;
+    // pre_tool_use: buffer raw event data for digest
+    if (event.type === 'pre_tool_use' && event.tool) {
+      const digestEvent: fmt.DigestEvent = {
+        tool: event.tool,
+        toolInput: event.toolInput || {},
+        assistantText: event.assistantText,
+      };
 
-    // Buffer per session
-    const buf = this.eventBuffer.get(session.id) || [];
-    buf.push(line);
-    this.eventBuffer.set(session.id, buf);
+      const buf = this.eventBuffer.get(session.id) || [];
+      buf.push(digestEvent);
+      this.eventBuffer.set(session.id, buf);
 
-    // Schedule 10-second batch flush with per-session random stagger (0-3s)
-    // to prevent all sessions from flushing at the same instant.
-    if (!this.eventFlushTimers.has(session.id)) {
-      const stagger = Math.random() * 3000;
-      this.eventFlushTimers.set(session.id, setTimeout(() => {
-        this.flushEventBuffer(session.id);
-      }, 10000 + stagger));
+      // Schedule 10-second batch flush with per-session random stagger (0-3s)
+      if (!this.eventFlushTimers.has(session.id)) {
+        const stagger = Math.random() * 3000;
+        this.eventFlushTimers.set(session.id, setTimeout(() => {
+          this.flushEventBuffer(session.id);
+        }, 10000 + stagger));
+      }
+      return;
+    }
+
+    // stop events with non-silent markers: send standalone (not collapsed into digest)
+    if (event.type === 'stop' && event.assistantText) {
+      if (event.marker?.category === 'silent') return;
+      const cleaned = event.assistantText.replace(/<!--rc:\w+:?[^>]*-->/g, '').trim();
+      if (!cleaned) return;
+
+      const desc = event.marker?.message || 'Response';
+      if (cleaned.length > 100) {
+        const titleHtml = `✅ <b>${fmt.escapeHtml(desc)}</b>`;
+        const overhead = 30 + titleHtml.length + 40 + 100;
+        const budget = TELEGRAM_MESSAGE_LIMIT - overhead;
+        const truncatedMd = cleaned.length > budget
+          ? cleaned.slice(0, budget) + '\n[... truncated]'
+          : cleaned;
+        const snippet = fmt.markdownToTelegramHtml(truncatedMd);
+        const stopLine = `<code>${new Date(event.timestamp).toLocaleTimeString('en-US', {
+          hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+        })}</code> ${titleHtml}\n<blockquote expandable>${snippet}</blockquote>`;
+
+        await this.flushEventBuffer(session.id);
+        const topicId = this.topicManager?.getTopicId(session.id);
+        if (topicId) {
+          await this.sendMessage(stopLine, { topicId, silent: true });
+        }
+      } else {
+        // Short stop: flush buffer first, then send inline
+        await this.flushEventBuffer(session.id);
+        const topicId = this.topicManager?.getTopicId(session.id);
+        if (topicId) {
+          const time = new Date(event.timestamp).toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+          });
+          await this.sendMessage(
+            `<code>${time}</code> ✅ ${fmt.escapeHtml(cleaned)}`,
+            { topicId, silent: true },
+          );
+        }
+      }
     }
   }
 
-  /** Flush the event buffer for a session — send all collected lines as one message. */
+  /** Flush the event buffer for a session — format as condensed activity digest. */
   private async flushEventBuffer(sessionId: string): Promise<void> {
     // Clear timer
     const timer = this.eventFlushTimers.get(sessionId);
@@ -1694,9 +1700,9 @@ export class TelegramBot {
     this.eventFlushTimers.delete(sessionId);
 
     // Pop buffer
-    const lines = this.eventBuffer.get(sessionId);
+    const events = this.eventBuffer.get(sessionId);
     this.eventBuffer.delete(sessionId);
-    if (!lines || lines.length === 0) {
+    if (!events || events.length === 0) {
       console.debug(`[Telegram] flushEventBuffer: empty buffer for session ${sessionId}`);
       return;
     }
@@ -1704,19 +1710,24 @@ export class TelegramBot {
     // Get topic
     const session = this.getSession(sessionId);
     if (!session) {
-      console.debug(`[Telegram] flushEventBuffer: session ${sessionId} not found, dropping ${lines.length} lines`);
+      console.debug(`[Telegram] flushEventBuffer: session ${sessionId} not found, dropping ${events.length} events`);
       return;
     }
     const topicId = this.topicManager?.getTopicId(sessionId);
     if (!topicId) {
-      console.debug(`[Telegram] flushEventBuffer: no topic for session ${sessionId}, dropping ${lines.length} lines`);
+      console.debug(`[Telegram] flushEventBuffer: no topic for session ${sessionId}, dropping ${events.length} events`);
       return;
     }
 
-    console.debug(`[Telegram] flushEventBuffer: sending ${lines.length} lines to topic ${topicId} for session ${sessionId}`);
-    // Send as one message
-    const html = lines.join('\n');
-    await this.sendMessage(html, { topicId, silent: true });
+    // Format as condensed digest
+    const digest = fmt.formatActivityDigest(events);
+    if (!digest) {
+      console.debug(`[Telegram] flushEventBuffer: empty digest for session ${sessionId} (${events.length} events)`);
+      return;
+    }
+
+    console.debug(`[Telegram] flushEventBuffer: sending digest to topic ${topicId} for session ${sessionId} (${events.length} events)`);
+    await this.sendMessage(digest, { topicId, silent: true });
   }
 
   // ---- Lifecycle ----
