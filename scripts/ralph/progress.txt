@@ -1,0 +1,52 @@
+## Codebase Patterns
+- `escapeHtml()` in `telegram-format.ts` for all user-facing text in Telegram HTML
+- `markdownToTelegramHtml()` for converting Claude's markdown responses to Telegram HTML
+- `splitMessage()` in `telegram-format.ts` handles 4000 char Telegram message limit
+- Pre-existing typecheck errors in `server/TopicManager.test.ts` — ignore when running `npx tsc --noEmit`
+- Event buffer in TelegramBot.ts: `eventBuffer` Map stores per-session arrays, flushed every 10s
+- `formatEventLine()` returns per-tool emoji + description lines (used in current event stream)
+- `sendMessage()` in TelegramBot.ts already calls `splitMessage()` — no need to manually split in callers
+- `formatSessionFinished()` uses expandable blockquote for >300 char content, plain text for shorter
+- `session.planContent` stores plan from ExitPlanMode — captured on pre_tool_use, cleared on user_prompt_submit
+- Variables for delayed setTimeout idle notifications must be captured before the delay (closure pattern: `capturedPlanContent`, `capturedMarkerCategory`)
+
+# Ralph Progress Log
+Started: Sun Feb 15 03:50:25 EET 2026
+---
+
+## 2026-02-15 - US-001
+- Implemented `formatActivityDigest()` function in `server/telegram-format.ts`
+- Added `DigestEvent` interface for typed input
+- Files changed: `server/telegram-format.ts`
+- **Learnings for future iterations:**
+  - The function deduplicates tools by grouping: Read/Grep/Glob get count summaries, Edit/Write always show basenames, Bash shows individual descriptions
+  - AssistantText filtering: skip single sentences starting with 'Let me', "I'll", 'Now' — picks longest non-trivial text
+  - `<!--rc:...-->` markers must be stripped from assistantText before display
+  - Pre-existing typecheck errors in `TopicManager.test.ts` are unrelated to this work
+---
+
+## 2026-02-15 - US-002
+- Removed `.slice(0, 3500)` truncation on `lastAssistantText` in `onStatusChange`
+- Now allows up to 8000 chars with `[... truncated, N chars total]` suffix when exceeded
+- Updated `formatSessionFinished()` to use expandable blockquote only for >300 char content
+- `sendMessage()` already handles multi-message splitting via `splitMessage()` — no additional work needed
+- Files changed: `server/TelegramBot.ts`, `server/telegram-format.ts`
+- **Learnings for future iterations:**
+  - `sendMessage()` in TelegramBot.ts already splits messages via `fmt.splitMessage()` — callers don't need to split manually
+  - The `snippet` variable in `onStatusChange` is captured at the top but used in a delayed setTimeout — be careful about variable scoping/closures
+  - `formatSessionFinished` content length thresholds: >300 → expandable blockquote, ≤300 → plain text
+---
+
+## 2026-02-15 - US-003
+- Added `planContent?: string` field to `ManagedSession` interface in `shared/types.ts`
+- In `SessionManager.handleEvent()`, store `toolInput.planContent` on session when `pre_tool_use` event is for `ExitPlanMode`
+- Clear `planContent` on `user_prompt_submit` (new task started)
+- In `TelegramBot.onStatusChange()`, send plan as a separate message with "📋 Plan:" header + expandable blockquote before the finished notification
+- Plan content budget: max 3000 chars with `[... plan truncated]` suffix
+- Files changed: `shared/types.ts`, `server/SessionManager.ts`, `server/TelegramBot.ts`
+- **Learnings for future iterations:**
+  - `planContent` is captured from `event.toolInput.planContent` on `ExitPlanMode` pre_tool_use — the hook already injects it
+  - Variables used in the delayed `setTimeout` idle notification must be captured before the delay (closures) — `capturedPlanContent` pattern
+  - Plan is sent as a separate `sendMessage()` call before the finished message to avoid exceeding Telegram message limits
+  - `SessionManager` already has `readLatestPlanContent()` for the notification/waiting path — `planContent` persistence is a simpler approach for the finished path
+---

@@ -33,6 +33,8 @@ export interface ManagedSession {
   gitBranch?: string;
   gitDirty?: boolean;
   totalTokens?: number;
+  /** Plan content from ExitPlanMode — persisted so the finished notification can include it. */
+  planContent?: string;
   /** Set by session_end timer — Claude exited but the shell pane is still alive.
    *  Prevents health check from reviving the session to idle. Cleared on session_start. */
   claudeExited?: boolean;

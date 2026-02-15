@@ -21,7 +21,7 @@
         "Typecheck passes"
       ],
       "priority": 1,
-      "passes": false,
+      "passes": true,
       "notes": "Look at existing formatEventLine() in telegram-format.ts for verb/icon patterns. Reuse its logic internally but produce a collapsed single-line output instead of per-tool lines. Use escapeHtml() (already in file) for all user-facing text."
     },
     {
@@ -38,7 +38,7 @@
         "Typecheck passes"
       ],
       "priority": 2,
-      "passes": false,
+      "passes": true,
       "notes": "The truncation is in TelegramBot.ts in the onStatusChange method where it does session.lastAssistantText?.slice(0, 3500). splitMessage() is already exported from telegram-format.ts and handles 4000 char Telegram limit. The sendMessage method on TelegramBot already exists."
     },
     {
@@ -56,7 +56,7 @@
         "Typecheck passes"
       ],
       "priority": 3,
-      "passes": false,
+      "passes": true,
       "notes": "ExitPlanMode events already have planContent in toolInput (hook.sh reads the plan file and adds it). The session object is defined either in shared/types.ts or server/SessionManager.ts. Check both."
     },
     {

@@ -387,6 +387,7 @@ export class SessionManager {
         session.currentTool = undefined;
         session.currentToolInput = undefined;
         session.lastAssistantText = undefined;
+        session.planContent = undefined;
         session.permissionRequest = undefined;
         break;
       case 'pre_tool_use':
@@ -397,6 +398,10 @@ export class SessionManager {
         // Save assistant text from pre_tool_use (what Claude said before calling the tool)
         if (event.assistantText) {
           session.lastAssistantText = event.assistantText;
+        }
+        // Persist plan content from ExitPlanMode for the finished notification
+        if (event.tool === 'ExitPlanMode' && event.toolInput?.planContent) {
+          session.planContent = String(event.toolInput.planContent);
         }
         break;
       case 'post_tool_use':

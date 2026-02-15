@@ -1419,6 +1419,7 @@ export class TelegramBot {
     if (prevStatus === 'working' && session.status === 'idle') {
       console.debug(`[Telegram] Scheduling 3s delayed idle notification for session ${session.id} (marker=${session.lastMarker?.category})`);
       const capturedMarkerCategory = session.lastMarker?.category;
+      const capturedPlanContent = session.planContent;
       const idleTimer = setTimeout(async () => {
         this.pendingIdleNotifications.delete(session.id);
         // Verify session is still idle (may have changed during the delay)
@@ -1431,6 +1432,15 @@ export class TelegramBot {
             { topicId },
           );
         } else {
+          // Include plan content before the response summary if available
+          if (capturedPlanContent) {
+            const planBudget = 3000;
+            const truncatedPlan = capturedPlanContent.length > planBudget
+              ? capturedPlanContent.slice(0, planBudget) + '\n[... plan truncated]'
+              : capturedPlanContent;
+            const planHtml = `📋 <b>Plan:</b>\n<blockquote expandable>${fmt.markdownToTelegramHtml(truncatedPlan)}</blockquote>`;
+            await this.sendMessage(planHtml, { topicId });
+          }
           await this.sendMessage(
             fmt.formatSessionFinished(name, snippet, markerMsg),
             { topicId },
