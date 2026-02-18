@@ -29,7 +29,7 @@ function needsContext(session: ManagedSession): boolean {
   return false;
 }
 
-/** Shorten a path like /Users/user/code/remote-claude -> ~/code/remote-claude */
+/** Shorten a path like /Users/john/code/project -> ~/code/project */
 function shortenPath(cwd: string): string {
   const home = '/Users/';
   if (cwd.startsWith(home)) {
